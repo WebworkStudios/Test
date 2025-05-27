@@ -21,6 +21,7 @@ use Closure;
  * - Configuration injection
  * - Service tagging and discovery
  * - Automatic interface binding
+ * - Enhanced security and circular dependency detection
  */
 final class Container implements ContainerInterface
 {
@@ -28,12 +29,23 @@ final class Container implements ContainerInterface
     private array $singletons = [];
     private array $resolved = [];
     private array $tagged = [];
-    private array $config = [];
+    private array $building = [];
+    private array $_config = [];
     private ?ServiceDiscovery $discovery = null;
+    private readonly array $allowedPaths;
 
-    public function __construct(array $config = [])
+    // PHP 8.4 Property Hooks für sichere Config-Verwaltung
+    public array $config {
+        get => $this->_config;
+        set(array $value) {
+            $this->_config = $this->validateConfig($value);
+        }
+    }
+
+    public function __construct(array $config = [], array $allowedPaths = [])
     {
         $this->config = $config;
+        $this->allowedPaths = $allowedPaths ?: [getcwd()];
         $this->discovery = new ServiceDiscovery($this);
         
         // Register container itself
@@ -42,13 +54,73 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Auto-discover and register services from given directories
+     * Validiert und normalisiert Konfigurationsdaten
+     */
+    private function validateConfig(array $config): array
+    {
+        return $this->sanitizeConfigArray($config);
+    }
+
+    /**
+     * Rekursive Sanitization von Config-Arrays
+     */
+    private function sanitizeConfigArray(array $config): array
+    {
+        $sanitized = [];
+        
+        foreach ($config as $key => $value) {
+            if (!is_string($key) || $key === '' || str_contains($key, '..')) {
+                continue;
+            }
+            
+            $sanitized[$key] = match (true) {
+                is_array($value) => $this->sanitizeConfigArray($value),
+                is_string($value) => $this->sanitizeConfigValue($value),
+                default => $value
+            };
+        }
+        
+        return $sanitized;
+    }
+
+    /**
+     * Sanitization einzelner Config-Werte
+     */
+    private function sanitizeConfigValue(string $value): string
+    {
+        // Entfernt potentiell gefährliche Sequenzen
+        return str_replace(['../', '..\\', '<script', '</script'], '', $value);
+    }
+
+    /**
+     * Auto-discover und register services from given directories
      * 
      * @param array<string> $directories
      */
     public function autodiscover(array $directories): void
     {
-        $this->discovery->autodiscover($directories);
+        $secureDirectories = array_filter($directories, [$this, 'isAllowedPath']);
+        $this->discovery->autodiscover($secureDirectories);
+    }
+
+    /**
+     * Prüft ob ein Pfad erlaubt ist
+     */
+    public function isAllowedPath(string $path): bool
+    {
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return false;
+        }
+
+        foreach ($this->allowedPaths as $allowedPath) {
+            $realAllowedPath = realpath($allowedPath);
+            if ($realAllowedPath && str_starts_with($realPath, $realAllowedPath)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -56,11 +128,27 @@ final class Container implements ContainerInterface
      */
     public function bind(string $id, mixed $concrete = null, bool $singleton = false): void
     {
+        if (!$this->isValidServiceId($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
         $this->services[$id] = $concrete ?? $id;
         
         if ($singleton) {
             $this->singletons[$id] = true;
         }
+    }
+
+    /**
+     * Validiert Service-IDs gegen Injection-Attacks
+     */
+    private function isValidServiceId(string $id): bool
+    {
+        return $id !== '' && 
+               !str_contains($id, '..') && 
+               !str_contains($id, '/') &&
+               !str_contains($id, '\\\\') &&
+               preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $id) === 1;
     }
 
     /**
@@ -76,6 +164,10 @@ final class Container implements ContainerInterface
      */
     public function instance(string $id, object $instance): void
     {
+        if (!$this->isValidServiceId($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
         $this->resolved[$id] = $instance;
         $this->singletons[$id] = true;
     }
@@ -85,6 +177,10 @@ final class Container implements ContainerInterface
      */
     public function tag(string $serviceId, string $tag): void
     {
+        if (!$this->isValidServiceId($serviceId) || !$this->isValidServiceId($tag)) {
+            throw ContainerException::invalidService($serviceId, 'Invalid service ID or tag format');
+        }
+
         $this->tagged[$tag][] = $serviceId;
     }
 
@@ -95,11 +191,20 @@ final class Container implements ContainerInterface
      */
     public function tagged(string $tag): array
     {
+        if (!$this->isValidServiceId($tag)) {
+            throw ContainerException::invalidService($tag, 'Invalid tag format');
+        }
+
         $services = [];
         
         if (isset($this->tagged[$tag])) {
             foreach ($this->tagged[$tag] as $serviceId) {
-                $services[] = $this->get($serviceId);
+                try {
+                    $services[] = $this->get($serviceId);
+                } catch (ContainerNotFoundException) {
+                    // Skip nicht-verfügbare Services
+                    continue;
+                }
             }
         }
         
@@ -107,10 +212,38 @@ final class Container implements ContainerInterface
     }
 
     /**
+     * Memory Management - Services vergessen
+     */
+    public function forget(string $id): void
+    {
+        unset(
+            $this->resolved[$id], 
+            $this->services[$id], 
+            $this->singletons[$id]
+        );
+    }
+
+    /**
+     * Kompletter Container-Reset
+     */
+    public function flush(): void
+    {
+        $this->resolved = [];
+        $this->building = [];
+        // Container-Selbst-Referenzen beibehalten
+        $this->instance(ContainerInterface::class, $this);
+        $this->instance(self::class, $this);
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function get(string $id): mixed
     {
+        if (!$this->isValidServiceId($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
         // Return already resolved singleton
         if (isset($this->resolved[$id])) {
             return $this->resolved[$id];
@@ -139,7 +272,7 @@ final class Container implements ContainerInterface
     {
         return isset($this->services[$id]) || 
                isset($this->resolved[$id]) || 
-               class_exists($id);
+               ($this->isValidServiceId($id) && class_exists($id));
     }
 
     /**
@@ -147,28 +280,43 @@ final class Container implements ContainerInterface
      */
     private function resolve(mixed $concrete): mixed
     {
-        if ($concrete instanceof Closure) {
-            return $concrete($this);
-        }
-
-        if (is_object($concrete)) {
-            return $concrete;
-        }
-
-        if (is_string($concrete)) {
-            return $this->build($concrete);
-        }
-
-        throw ContainerException::cannotResolve(
-            gettype($concrete), 
-            'Unsupported concrete type'
-        );
+        return match (true) {
+            $concrete instanceof Closure => $concrete($this),
+            is_object($concrete) => $concrete,
+            is_string($concrete) && $this->isValidServiceId($concrete) => $this->build($concrete),
+            default => throw ContainerException::cannotResolve(
+                gettype($concrete), 
+                'Unsupported concrete type'
+            )
+        };
     }
 
     /**
-     * Build class instance using reflection and dependency injection
+     * Build class instance mit Circular Dependency Detection
      */
     private function build(string $className): object
+    {
+        // Circular Dependency Detection
+        if (in_array($className, $this->building, true)) {
+            throw ContainerException::circularDependency([...$this->building, $className]);
+        }
+
+        $this->building[] = $className;
+
+        try {
+            $instance = $this->doBuild($className);
+            array_pop($this->building);
+            return $instance;
+        } catch (\Throwable $e) {
+            array_pop($this->building);
+            throw $e;
+        }
+    }
+
+    /**
+     * Eigentliche Build-Logik
+     */
+    private function doBuild(string $className): object
     {
         try {
             $reflection = new ReflectionClass($className);
@@ -204,8 +352,15 @@ final class Container implements ContainerInterface
         $dependencies = [];
 
         foreach ($parameters as $parameter) {
-            $dependency = $this->resolveParameter($parameter);
-            $dependencies[] = $dependency;
+            try {
+                $dependency = $this->resolveParameter($parameter);
+                $dependencies[] = $dependency;
+            } catch (\Throwable $e) {
+                throw ContainerException::cannotResolve(
+                    $parameter->getName(),
+                    "Parameter resolution failed: {$e->getMessage()}"
+                );
+            }
         }
 
         return $dependencies;
@@ -252,10 +407,16 @@ final class Container implements ContainerInterface
     {
         try {
             if ($inject->id !== null) {
+                if (!$this->isValidServiceId($inject->id)) {
+                    throw ContainerException::invalidService($inject->id, 'Invalid injected service ID');
+                }
                 return $this->get($inject->id);
             }
             
             if ($inject->tag !== null) {
+                if (!$this->isValidServiceId($inject->tag)) {
+                    throw ContainerException::invalidService($inject->tag, 'Invalid injected tag');
+                }
                 $services = $this->tagged($inject->tag);
                 if (empty($services)) {
                     throw ContainerNotFoundException::tagNotFound($inject->tag);
@@ -292,13 +453,20 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Get configuration value using dot notation
+     * Get configuration value using dot notation mit Security-Checks
      */
     private function getConfigValue(string $key): mixed
     {
-        $keys = explode('.', $key);
-        $value = $this->config;
+        if (!is_string($key) || $key === '' || str_contains($key, '..') || str_contains($key, '/')) {
+            return null;
+        }
         
+        $keys = array_filter(explode('.', $key), 'strlen');
+        if (empty($keys)) {
+            return null;
+        }
+        
+        $value = $this->_config;
         foreach ($keys as $segment) {
             if (!is_array($value) || !array_key_exists($segment, $value)) {
                 return null;
@@ -314,25 +482,23 @@ final class Container implements ContainerInterface
      */
     private function resolveParameterType(ReflectionParameter $parameter, mixed $type): mixed
     {
-        if ($type instanceof ReflectionUnionType) {
-            return $this->resolveUnionType($parameter, $type);
-        }
-
-        if ($type instanceof ReflectionNamedType) {
-            return $this->resolveNamedType($parameter, $type);
-        }
-
-        throw ContainerException::cannotResolve(
-            $parameter->getName(),
-            'Unsupported parameter type'
-        );
+        return match (true) {
+            $type instanceof ReflectionUnionType => $this->resolveUnionType($parameter, $type),
+            $type instanceof ReflectionNamedType => $this->resolveNamedType($parameter, $type),
+            default => throw ContainerException::cannotResolve(
+                $parameter->getName(),
+                'Unsupported parameter type'
+            )
+        };
     }
 
     /**
-     * Resolve Union Type parameter (try each type until successful)
+     * Resolve Union Type parameter mit verbesserter Fehlerbehandlung
      */
     private function resolveUnionType(ReflectionParameter $parameter, ReflectionUnionType $unionType): mixed
     {
+        $exceptions = [];
+
         foreach ($unionType->getTypes() as $type) {
             if (!$type instanceof ReflectionNamedType) {
                 continue;
@@ -340,7 +506,8 @@ final class Container implements ContainerInterface
 
             try {
                 return $this->resolveNamedType($parameter, $type);
-            } catch (ContainerException) {
+            } catch (ContainerException $e) {
+                $exceptions[] = $e->getMessage();
                 continue;
             }
         }
@@ -351,7 +518,7 @@ final class Container implements ContainerInterface
 
         throw ContainerException::cannotResolve(
             $parameter->getName(),
-            'Cannot resolve union type'
+            'Union type resolution failed: ' . implode(', ', $exceptions)
         );
     }
 
@@ -371,6 +538,14 @@ final class Container implements ContainerInterface
             throw ContainerException::cannotResolve(
                 $parameter->getName(),
                 "Cannot auto-resolve built-in type '{$typeName}'"
+            );
+        }
+
+        // Sicherheitsprüfung für Klassenname
+        if (!$this->isValidServiceId($typeName)) {
+            throw ContainerException::cannotResolve(
+                $parameter->getName(),
+                "Invalid class name '{$typeName}'"
             );
         }
 
