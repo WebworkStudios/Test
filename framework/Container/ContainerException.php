@@ -4,16 +4,13 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
-use Psr\Container\ContainerExceptionInterface;
-use Psr\Container\NotFoundExceptionInterface;
-
 /**
- * Base container exception implementing PSR-11 interface
- * 
- * Erweiterte Exception-Klasse mit verbesserter Fehlerbehandlung,
- * Logging-Unterstützung und strukturierten Fehlerdaten.
+ * Framework Container Exception
+ *
+ * Keine PSR-11 Abhängigkeit, optimiert für unser Framework.
+ * Fokus auf Performance und bessere Fehlerdiagnose.
  */
-class ContainerException extends \Exception implements ContainerExceptionInterface
+class ContainerException extends \Exception
 {
     private array $context = [];
     private ?string $serviceId = null;
@@ -36,12 +33,12 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
     private function sanitizeContext(array $context): array
     {
         $sanitized = [];
-        
+
         foreach ($context as $key => $value) {
             if (!is_string($key) || str_contains($key, '..')) {
                 continue;
             }
-            
+
             $sanitized[$key] = match (true) {
                 is_scalar($value) => $value,
                 is_array($value) => $this->sanitizeContext($value),
@@ -49,21 +46,15 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
                 default => gettype($value)
             };
         }
-        
+
         return $sanitized;
     }
 
-    /**
-     * Get zusätzliche Kontext-Informationen
-     */
     public function getContext(): array
     {
         return $this->context;
     }
 
-    /**
-     * Get betroffene Service-ID
-     */
     public function getServiceId(): ?string
     {
         return $this->serviceId;
@@ -74,14 +65,13 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
      */
     public static function cannotResolve(string $service, string $reason = '', array $context = []): self
     {
-        // Sanitize service name
         $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
-        
+
         $message = "Cannot resolve service '{$safeService}'";
         if ($reason !== '') {
             $message .= ": {$reason}";
         }
-        
+
         return new self($message, 1001, null, $context, $safeService);
     }
 
@@ -91,7 +81,7 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
     public static function invalidService(string $service, string $reason, array $context = []): self
     {
         $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
-        
+
         return new self(
             "Invalid service definition for '{$safeService}': {$reason}",
             1002,
@@ -106,14 +96,13 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
      */
     public static function circularDependency(array $chain, array $context = []): self
     {
-        // Sanitize chain
         $safeChain = array_map(
             fn($item) => preg_replace('/[^\w\\\\\.]/', '', (string)$item),
             $chain
         );
-        
+
         $chainStr = implode(' -> ', $safeChain);
-        
+
         return new self(
             "Circular dependency detected: {$chainStr}",
             1003,
@@ -128,7 +117,7 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
     public static function securityViolation(string $service, string $reason, array $context = []): self
     {
         $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
-        
+
         return new self(
             "Security violation for service '{$safeService}': {$reason}",
             1004,
@@ -144,31 +133,13 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
     public static function configurationError(string $key, string $reason, array $context = []): self
     {
         $safeKey = preg_replace('/[^\w\.]/', '', $key);
-        
+
         return new self(
             "Configuration error for key '{$safeKey}': {$reason}",
             1005,
             null,
             array_merge($context, ['config_key' => $safeKey])
         );
-    }
-
-    /**
-     * Erweiterte toString-Methode mit Kontext
-     */
-    public function __toString(): string
-    {
-        $result = parent::__toString();
-        
-        if (!empty($this->context)) {
-            $result .= "\nContext: " . json_encode($this->context, JSON_PRETTY_PRINT);
-        }
-        
-        if ($this->serviceId !== null) {
-            $result .= "\nService ID: {$this->serviceId}";
-        }
-        
-        return $result;
     }
 
     /**
@@ -186,15 +157,29 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
             'trace' => $this->getTraceAsString()
         ];
     }
+
+    public function __toString(): string
+    {
+        $result = parent::__toString();
+
+        if (!empty($this->context)) {
+            $result .= "\nContext: " . json_encode($this->context, JSON_PRETTY_PRINT);
+        }
+
+        if ($this->serviceId !== null) {
+            $result .= "\nService ID: {$this->serviceId}";
+        }
+
+        return $result;
+    }
 }
 
 /**
  * Exception thrown when requested service is not found
- * 
- * Erweiterte NotFound-Exception mit verbesserter Diagnose
- * und Vorschlägen für ähnliche Services.
+ *
+ * Erweiterte NotFound-Exception mit Service-Vorschlägen
  */
-class ContainerNotFoundException extends ContainerException implements NotFoundExceptionInterface
+class ContainerNotFoundException extends ContainerException
 {
     private array $suggestions = [];
 
@@ -204,7 +189,7 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
     public static function serviceNotFound(string $service, array $availableServices = []): self
     {
         $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
-        
+
         $exception = new self(
             "Service '{$safeService}' not found in container",
             2001,
@@ -212,9 +197,9 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
             ['available_count' => count($availableServices)],
             $safeService
         );
-        
+
         $exception->suggestions = $exception->findSimilarServices($safeService, $availableServices);
-        
+
         return $exception;
     }
 
@@ -224,16 +209,16 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
     public static function tagNotFound(string $tag, array $availableTags = []): self
     {
         $safeTag = preg_replace('/[^\w\.]/', '', $tag);
-        
+
         $exception = new self(
             "No services found with tag '{$safeTag}'",
             2002,
             null,
-            ['available_tags' => array_slice($availableTags, 0, 10)] // Limit für Security
+            ['available_tags' => array_slice($availableTags, 0, 10)]
         );
-        
+
         $exception->suggestions = $exception->findSimilarServices($safeTag, $availableTags);
-        
+
         return $exception;
     }
 
@@ -245,35 +230,32 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
         if (empty($haystack) || strlen($needle) < 3) {
             return [];
         }
-        
+
         $suggestions = [];
         $needle = strtolower($needle);
-        
+
         foreach ($haystack as $service) {
             if (!is_string($service)) {
                 continue;
             }
-            
+
             $service = strtolower($service);
             $similarity = 0;
-            
-            // Levenshtein für kurze Strings
+
             if (strlen($service) < 50 && strlen($needle) < 50) {
                 $distance = levenshtein($needle, $service);
                 $maxLen = max(strlen($needle), strlen($service));
                 $similarity = 1 - ($distance / $maxLen);
             }
-            
-            // Similar_text als Alternative
+
             if ($similarity < 0.5) {
                 similar_text($needle, $service, $similarity);
             }
-            
-            // Enthält-Prüfung für Teilstrings
+
             if ($similarity < 0.3 && str_contains($service, $needle)) {
                 $similarity = 0.6;
             }
-            
+
             if ($similarity > 0.4) {
                 $suggestions[] = [
                     'service' => $service,
@@ -281,11 +263,9 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
                 ];
             }
         }
-        
-        // Sortiere nach Ähnlichkeit
+
         usort($suggestions, fn($a, $b) => $b['similarity'] <=> $a['similarity']);
-        
-        // Maximal 5 Vorschläge
+
         return array_slice(
             array_column($suggestions, 'service'),
             0,
@@ -293,9 +273,6 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
         );
     }
 
-    /**
-     * Get service suggestions
-     */
     public function getSuggestions(): array
     {
         return $this->suggestions;
@@ -307,29 +284,26 @@ class ContainerNotFoundException extends ContainerException implements NotFoundE
     public function getMessageWithSuggestions(): string
     {
         $message = $this->getMessage();
-        
+
         if (!empty($this->suggestions)) {
             $message .= "\n\nDid you mean one of these?";
             foreach ($this->suggestions as $suggestion) {
                 $message .= "\n  - {$suggestion}";
             }
         }
-        
+
         return $message;
     }
 
-    /**
-     * Override toString für bessere Diagnostik
-     */
     public function __toString(): string
     {
         $result = $this->getMessageWithSuggestions();
         $result .= "\n\nStack trace:\n" . $this->getTraceAsString();
-        
+
         if (!empty($this->getContext())) {
             $result .= "\n\nContext: " . json_encode($this->getContext(), JSON_PRETTY_PRINT);
         }
-        
+
         return $result;
     }
 }
