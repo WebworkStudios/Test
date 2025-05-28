@@ -188,7 +188,7 @@ class ContainerNotFoundException extends ContainerException
      */
     public static function serviceNotFound(string $service, array $availableServices = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\\.]', '', $service);
+        $safeService = preg_replace('/[^\w\\\\.]/s', '', $service);
 
         $exception = new self(
             "Service '{$safeService}' not found in container",
