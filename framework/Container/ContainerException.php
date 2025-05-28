@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 /**
- * Framework Container Exception
+ * Framework Container Exception mit PHP 8.4 Features
  *
  * Keine PSR-11 Abhängigkeit, optimiert für unser Framework.
  * Fokus auf Performance und bessere Fehlerdiagnose.
@@ -28,7 +28,7 @@ class ContainerException extends \Exception
     }
 
     /**
-     * Sanitize context data für sichere Ausgabe
+     * Sanitize context data für sichere Ausgabe mit PHP 8.4 match
      */
     private function sanitizeContext(array $context): array
     {
@@ -42,7 +42,7 @@ class ContainerException extends \Exception
             $sanitized[$key] = match (true) {
                 is_scalar($value) => $value,
                 is_array($value) => $this->sanitizeContext($value),
-                is_object($value) => get_class($value),
+                is_object($value) => $value::class,
                 default => gettype($value)
             };
         }
@@ -223,7 +223,7 @@ class ContainerNotFoundException extends ContainerException
     }
 
     /**
-     * Findet ähnliche Services basierend auf String-Ähnlichkeit
+     * Findet ähnliche Services basierend auf String-Ähnlichkeit mit PHP 8.4 match
      */
     private function findSimilarServices(string $needle, array $haystack): array
     {
@@ -240,21 +240,7 @@ class ContainerNotFoundException extends ContainerException
             }
 
             $service = strtolower($service);
-            $similarity = 0;
-
-            if (strlen($service) < 50 && strlen($needle) < 50) {
-                $distance = levenshtein($needle, $service);
-                $maxLen = max(strlen($needle), strlen($service));
-                $similarity = 1 - ($distance / $maxLen);
-            }
-
-            if ($similarity < 0.5) {
-                similar_text($needle, $service, $similarity);
-            }
-
-            if ($similarity < 0.3 && str_contains($service, $needle)) {
-                $similarity = 0.6;
-            }
+            $similarity = $this->calculateSimilarity($needle, $service);
 
             if ($similarity > 0.4) {
                 $suggestions[] = [
@@ -271,6 +257,32 @@ class ContainerNotFoundException extends ContainerException
             0,
             5
         );
+    }
+
+    /**
+     * Berechnet String-Ähnlichkeit mit verschiedenen Algorithmen
+     */
+    private function calculateSimilarity(string $needle, string $service): float
+    {
+        return match (true) {
+            strlen($service) < 50 && strlen($needle) < 50 => $this->levenshteinSimilarity($needle, $service),
+            str_contains($service, $needle) => 0.6,
+            default => $this->similarTextSimilarity($needle, $service)
+        };
+    }
+
+    private function levenshteinSimilarity(string $needle, string $service): float
+    {
+        $distance = levenshtein($needle, $service);
+        $maxLen = max(strlen($needle), strlen($service));
+        return 1 - ($distance / $maxLen);
+    }
+
+    private function similarTextSimilarity(string $needle, string $service): float
+    {
+        $similarity = 0;
+        similar_text($needle, $service, $similarity);
+        return $similarity / 100;
     }
 
     public function getSuggestions(): array

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Framework\Container\Attributes\{Config, Inject};
+use Framework\Container\Lazy\{LazyProxy, GenericLazyProxy};
+
 /**
  * High-Performance Framework Container
  *
@@ -29,7 +32,7 @@ final class Container
     private bool $compiled = false;
 
     // Security & Config
-    private readonly array $config;
+    public readonly array $config;
     private readonly array $allowedPaths;
     private readonly ServiceDiscovery $discovery;
 
@@ -121,10 +124,7 @@ final class Container
     private function resolveContextual(string $context, string $id): mixed
     {
         $concrete = $this->registry['contextual'][$context][$id];
-        $instance = $this->build($concrete);
-
-        // Contextual bindings sind normalerweise nicht singleton
-        return $instance;
+        return $this->build($concrete);
     }
 
     /**
@@ -132,19 +132,12 @@ final class Container
      */
     private function build(mixed $concrete): mixed
     {
-        if (is_callable($concrete)) {
-            return $concrete($this);
-        }
-
-        if (is_string($concrete) && class_exists($concrete)) {
-            return $this->buildClass($concrete);
-        }
-
-        if (is_object($concrete)) {
-            return $concrete;
-        }
-
-        return $concrete;
+        return match (true) {
+            is_callable($concrete) => $concrete($this),
+            is_string($concrete) && class_exists($concrete) => $this->buildClass($concrete),
+            is_object($concrete) => $concrete,
+            default => $concrete
+        };
     }
 
     /**
@@ -218,13 +211,13 @@ final class Container
     private function resolveParameter(\ReflectionParameter $parameter, string $context): mixed
     {
         // Prüfe Inject Attribut
-        $injectAttrs = $parameter->getAttributes(Attributes\Inject::class);
+        $injectAttrs = $parameter->getAttributes(Inject::class);
         if (!empty($injectAttrs)) {
             return $this->resolveInjectAttribute($injectAttrs[0], $parameter);
         }
 
         // Prüfe Config Attribut
-        $configAttrs = $parameter->getAttributes(Attributes\Config::class);
+        $configAttrs = $parameter->getAttributes(Config::class);
         if (!empty($configAttrs)) {
             return $this->resolveConfigAttribute($configAttrs[0], $parameter);
         }
@@ -379,61 +372,15 @@ final class Container
         }
 
         // Generic Proxy
-        return $this->createGenericLazyProxy($initializer);
+        return new GenericLazyProxy($initializer);
     }
 
     /**
      * Fallback Lazy Proxy
      */
-    private function createManualLazyProxy(string $id, callable $factory): object
+    private function createManualLazyProxy(string $id, callable $factory): LazyProxy
     {
-        return new class($factory, $this, $id) {
-            private mixed $instance = null;
-            private bool $initialized = false;
-
-            public function __construct(
-                private readonly callable $factory,
-                private readonly Container $container,
-                private readonly string $id
-            ) {}
-
-            private function initialize(): void
-            {
-                if (!$this->initialized) {
-                    $this->instance = ($this->factory)($this->container);
-                    if (is_object($this->instance)) {
-                        $this->container->trackInstance($this->id, $this->instance);
-                    }
-                    $this->initialized = true;
-                }
-            }
-
-            public function __call(string $name, array $arguments): mixed
-            {
-                $this->initialize();
-                return $this->instance?->$name(...$arguments);
-            }
-
-            public function __get(string $name): mixed
-            {
-                $this->initialize();
-                return $this->instance?->$name;
-            }
-
-            public function __set(string $name, mixed $value): void
-            {
-                $this->initialize();
-                if ($this->instance !== null) {
-                    $this->instance->$name = $value;
-                }
-            }
-
-            public function __isset(string $name): bool
-            {
-                $this->initialize();
-                return isset($this->instance?->$name);
-            }
-        };
+        return new LazyProxy($factory, $this, $id);
     }
 
     // === PUBLIC API ===
@@ -616,7 +563,7 @@ final class Container
      */
     public function autodiscover(array $directories): self
     {
-        $this->discovery->autodiscoverCached($directories);
+        $this->discovery->autodiscover($directories);
         return $this;
     }
 
@@ -637,6 +584,8 @@ final class Container
 
         return $cleaned;
     }
+
+    // === PRIVATE HELPER METHODS ===
 
     private function isValidServiceId(string $id): bool
     {
@@ -682,50 +631,6 @@ final class Container
         }
 
         return null;
-    }
-
-    private function createGenericLazyProxy(callable $initializer): object
-    {
-        return new class($initializer) {
-            private mixed $instance = null;
-            private bool $initialized = false;
-
-            public function __construct(private readonly callable $initializer) {}
-
-            private function initialize(): void
-            {
-                if (!$this->initialized) {
-                    $this->instance = ($this->initializer)();
-                    $this->initialized = true;
-                }
-            }
-
-            public function __call(string $name, array $arguments): mixed
-            {
-                $this->initialize();
-                return $this->instance?->$name(...$arguments);
-            }
-
-            public function __get(string $name): mixed
-            {
-                $this->initialize();
-                return $this->instance?->$name;
-            }
-
-            public function __set(string $name, mixed $value): void
-            {
-                $this->initialize();
-                if ($this->instance !== null) {
-                    $this->instance->$name = $value;
-                }
-            }
-
-            public function __isset(string $name): bool
-            {
-                $this->initialize();
-                return isset($this->instance?->$name);
-            }
-        };
     }
 
     private function generateCompiledBindings(): array
@@ -801,5 +706,12 @@ final class Container
             'active_instances' => $activeInstances,
             'memory_usage' => memory_get_usage(true)
         ];
+    }
+
+    public function __destruct()
+    {
+        // Cleanup für WeakMaps und Referenzen
+        $this->objectRefs = new \WeakMap();
+        $this->reflectionCache = new \WeakMap();
     }
 }
