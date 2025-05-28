@@ -17,7 +17,7 @@ final class LazyProxy
     private bool $initialized = false;
 
     public function __construct(
-        private readonly callable $factory,
+        private readonly \Closure $factory,
         private readonly Container $container,
         private readonly string $id
     ) {}
@@ -26,20 +26,20 @@ final class LazyProxy
     {
         if (!$this->initialized) {
             $this->instance = ($this->factory)($this->container);
-            if (is_object($this->instance)) {
+            if (is_object($this->instance) && method_exists($this->container, 'trackInstance')) {
                 $this->container->trackInstance($this->id, $this->instance);
             }
             $this->initialized = true;
         }
     }
 
-    public function __call(string $name, array $arguments): mixed
+    public function __call(string $name, array $arguments): null
     {
         $this->initialize();
         return $this->instance?->$name(...$arguments);
     }
 
-    public function __get(string $name): mixed
+    public function __get(string $name): null
     {
         $this->initialize();
         return $this->instance?->$name;
@@ -76,6 +76,9 @@ final class LazyProxy
     public function __invoke(...$arguments): mixed
     {
         $this->initialize();
+        if ($this->instance === null || !is_callable($this->instance)) {
+            throw new \BadMethodCallException('Proxied instance is not callable');
+        }
         return $this->instance(...$arguments);
     }
 

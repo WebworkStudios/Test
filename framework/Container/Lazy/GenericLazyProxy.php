@@ -1,6 +1,5 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Container\Lazy;
@@ -16,10 +15,8 @@ final class GenericLazyProxy
     private bool $initialized = false;
 
     public function __construct(
-        private readonly callable $initializer
-    )
-    {
-    }
+        private readonly \Closure $initializer
+    ) {}
 
     private function initialize(): void
     {
@@ -29,13 +26,13 @@ final class GenericLazyProxy
         }
     }
 
-    public function __call(string $name, array $arguments): mixed
+    public function __call(string $name, array $arguments): null
     {
         $this->initialize();
         return $this->instance?->$name(...$arguments);
     }
 
-    public function __get(string $name): mixed
+    public function __get(string $name): null
     {
         $this->initialize();
         return $this->instance?->$name;
