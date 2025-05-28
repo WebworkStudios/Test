@@ -65,7 +65,7 @@ class ContainerException extends \Exception
      */
     public static function cannotResolve(string $service, string $reason = '', array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
+        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
 
         $message = "Cannot resolve service '{$safeService}'";
         if ($reason !== '') {
@@ -80,7 +80,7 @@ class ContainerException extends \Exception
      */
     public static function invalidService(string $service, string $reason, array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
+        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
 
         return new self(
             "Invalid service definition for '{$safeService}': {$reason}",
@@ -97,7 +97,7 @@ class ContainerException extends \Exception
     public static function circularDependency(array $chain, array $context = []): self
     {
         $safeChain = array_map(
-            fn($item) => preg_replace('/[^\w\\\\\.]/', '', (string)$item),
+            fn($item) => preg_replace('/[^\w\\\\.]/', '', (string)$item),
             $chain
         );
 
@@ -116,7 +116,7 @@ class ContainerException extends \Exception
      */
     public static function securityViolation(string $service, string $reason, array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
+        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
 
         return new self(
             "Security violation for service '{$safeService}': {$reason}",
@@ -132,7 +132,7 @@ class ContainerException extends \Exception
      */
     public static function configurationError(string $key, string $reason, array $context = []): self
     {
-        $safeKey = preg_replace('/[^\w\.]/', '', $key);
+        $safeKey = preg_replace('/[^\w\.]', '', $key);
 
         return new self(
             "Configuration error for key '{$safeKey}': {$reason}",
@@ -188,7 +188,7 @@ class ContainerNotFoundException extends ContainerException
      */
     public static function serviceNotFound(string $service, array $availableServices = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\\.]/', '', $service);
+        $safeService = preg_replace('/[^\w\\\\\.]', '', $service);
 
         $exception = new self(
             "Service '{$safeService}' not found in container",
@@ -208,7 +208,7 @@ class ContainerNotFoundException extends ContainerException
      */
     public static function tagNotFound(string $tag, array $availableTags = []): self
     {
-        $safeTag = preg_replace('/[^\w\.]/', '', $tag);
+        $safeTag = preg_replace('/[^\w\.]', '', $tag);
 
         $exception = new self(
             "No services found with tag '{$safeTag}'",
@@ -223,7 +223,7 @@ class ContainerNotFoundException extends ContainerException
     }
 
     /**
-     * Findet ähnliche Services basierend auf String-Ähnlichkeit mit PHP 8.4 match
+     * Findet ähnliche Services basierend auf String-ÄÄhnlichkeit mit PHP 8.4 match
      */
     private function findSimilarServices(string $needle, array $haystack): array
     {

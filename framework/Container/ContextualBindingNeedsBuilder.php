@@ -28,12 +28,14 @@ final readonly class ContextualBindingNeedsBuilder
         $this->container->addContextualBinding($this->context, $this->abstract, $implementation);
     }
 
+// In framework/Container/ContextualBindingNeedsBuilder.php
+
     /**
      * Specify a tagged service for the contextual binding
      */
     public function giveTagged(string $tag): void
     {
-        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_\.]*$/', $tag)) {
+        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
             throw new \InvalidArgumentException("Invalid tag format: {$tag}");
         }
 
@@ -53,7 +55,7 @@ final readonly class ContextualBindingNeedsBuilder
      */
     public function giveAllTagged(string $tag): void
     {
-        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_\.]*$/', $tag)) {
+        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
             throw new \InvalidArgumentException("Invalid tag format: {$tag}");
         }
 

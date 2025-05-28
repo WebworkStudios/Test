@@ -11,7 +11,7 @@ use RecursiveIteratorIterator;
 use Composer\Autoload\ClassLoader;
 
 /**
- * Sichere Service Discovery Engine für attribute-basierte Auto-Registration
+ * Sichere Service Discovery engine für attribute-basierte Auto-Registration
  * 
  * Scannt Verzeichnisse nach Klassen mit Service-Attributen und registriert
  * sie automatisch im Container mit erweiterten Sicherheitsprüfungen.
