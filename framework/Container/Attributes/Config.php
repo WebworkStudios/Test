@@ -43,7 +43,7 @@ final readonly class Config
             throw new \InvalidArgumentException('Config key cannot be empty'),
             str_contains($this->key, '..') =>
             throw new \InvalidArgumentException('Config key cannot contain ".."'),
-            !preg_match('/^[a-zA-Z_][a-zA-Z0-9_\.]*$/', $this->key) =>
+            !preg_match('/^[a-zA-Z_][a-zA-Z0-9_\.]*$', $this->key) =>
             throw new \InvalidArgumentException('Invalid config key format'),
             default => null
         };

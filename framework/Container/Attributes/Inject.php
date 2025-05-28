@@ -64,7 +64,7 @@ final readonly class Inject
         return $this->tag === null || (
                 !empty($this->tag) &&
                 !str_contains($this->tag, '..') &&
-                preg_match('/^[a-zA-Z_][a-zA-Z0-9_\\.]*$/', $this->tag) === 1
+                preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $this->tag) === 1
             );
     }
 

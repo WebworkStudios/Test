@@ -8,7 +8,7 @@ use Framework\Container\Attributes\{Service, Factory};
 use ReflectionClass;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use Composer\Autoload\ClassLoader;
+
 
 /**
  * Sichere Service Discovery engine für attribute-basierte Auto-Registration
@@ -196,31 +196,31 @@ final readonly class ServiceDiscovery
 
     /**
      * Sichere Klassenextraktion über Composer-Autoloader APIs
-     * 
+     *
      * @return array<string>
      */
     private function getClassesFromComposer(string $filePath): array
     {
         $classes = [];
         $realFilePath = realpath($filePath);
-        
+
         if ($realFilePath === false) {
             return [];
         }
-        
+
         // Methode 1: Über composer/autoload_classmap.php (sicherste Methode)
         $classes = array_merge($classes, $this->getClassesFromClassmap($realFilePath));
-        
+
         // Methode 2: Über PSR-4 Namespace-Mapping (falls Classmap leer)
         if (empty($classes)) {
             $classes = array_merge($classes, $this->getClassesFromPsr4($realFilePath));
         }
-        
+
         // Methode 3: Über öffentliche Composer-API (falls verfügbar)
         if (empty($classes) && class_exists('Composer\\Autoload\\ClassLoader')) {
             $classes = array_merge($classes, $this->getClassesFromComposerApi($realFilePath));
         }
-        
+
         return array_unique($classes);
     }
     
@@ -392,34 +392,36 @@ final readonly class ServiceDiscovery
         
         return $classes;
     }
-    
+
+
     /**
      * Sichere Extraktion über öffentliche Composer-APIs (ohne Reflection)
-     * 
+     *
      * @return array<string>
      */
     private function getClassesFromComposerApi(string $filePath): array
     {
         $classes = [];
-        
+
         // Verwende nur öffentliche APIs ohne Reflection-Hacks
         if (function_exists('spl_autoload_functions')) {
             $autoloaders = spl_autoload_functions();
-            
+
             foreach ($autoloaders as $autoloader) {
-                if (is_array($autoloader) && 
-                    isset($autoloader[0]) && 
-                    $autoloader[0] instanceof \Composer\Autoload\ClassLoader) {
-                    
+                if (is_array($autoloader) &&
+                    isset($autoloader[0]) &&
+                    is_object($autoloader[0]) &&
+                    get_class($autoloader[0]) === 'Composer\\Autoload\\ClassLoader') {
+
                     // Verwende nur dokumentierte öffentliche Methoden
                     $loader = $autoloader[0];
-                    
+
                     // Prüfe ob die Datei in den konfigurierten Pfaden liegt
                     if (method_exists($loader, 'getPrefixes')) {
                         $prefixes = $loader->getPrefixes();
                         $classes = array_merge($classes, $this->matchFileToClasses($filePath, $prefixes));
                     }
-                    
+
                     if (method_exists($loader, 'getPrefixesPsr4')) {
                         $psr4Prefixes = $loader->getPrefixesPsr4();
                         $classes = array_merge($classes, $this->matchFileToClasses($filePath, $psr4Prefixes));
@@ -427,10 +429,10 @@ final readonly class ServiceDiscovery
                 }
             }
         }
-        
+
         return array_unique($classes);
     }
-    
+
     /**
      * Matche Datei zu Klassen basierend auf Namespace-Prefixes
      * 

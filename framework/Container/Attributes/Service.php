@@ -63,7 +63,7 @@ final readonly class Service
 
         // Validate tags
         foreach ($this->tags as $tag) {
-            if (!is_string($tag) || empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_\.]*$/', $tag)) {
+            if (!is_string($tag) || empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
                 throw new \InvalidArgumentException("Invalid tag format: {$tag}");
             }
         }
