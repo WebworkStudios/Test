@@ -7,7 +7,7 @@ namespace Framework\Http;
 /**
  * Secure Session Management with PHP 8.4 enhancements and optimized lazy loading
  */
-final class Session
+final class Session implements SessionInterface
 {
     // Security constants
     private const int MAX_LIFETIME = 7200; // 2 hours

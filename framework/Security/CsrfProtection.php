@@ -1,32 +1,46 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Security;
 
-use Framework\Http\Session;
+use Framework\Http\SessionInterface;
 
 /**
  * CSRF Protection with token management and validation
  */
-final readonly class CsrfProtection
+final  class CsrfProtection implements CsrfProtectionInterface
 {
     private const int TOKEN_LENGTH = 32;
     private const int MAX_TOKENS = 10; // Limit stored tokens
+    private const int TOKEN_LIFETIME = 3600; // 1 hour default
     private const string SESSION_KEY = '_csrf_tokens';
 
     public function __construct(
-        private Session $session
-    )
-    {
+        private SessionInterface $session
+    ) {}
+
+    // Property Hooks for better API
+    public string $defaultToken {
+        get => $this->token('default');
+    }
+
+    public array $allTokens {
+        get => $this->getStoredTokens();
+    }
+
+    public bool $hasTokens {
+        get => !empty($this->getStoredTokens());
     }
 
     /**
-     * Generate new CSRF token
+     * Generate new CSRF token with automatic cleanup
      */
     public function generateToken(?string $action = 'default'): string
     {
+        // Clean expired tokens before generating new one
+        $this->cleanExpiredTokens();
+
         $token = bin2hex(random_bytes(self::TOKEN_LENGTH));
         $timestamp = time();
 
@@ -49,7 +63,7 @@ final readonly class CsrfProtection
     }
 
     /**
-     * Validate CSRF token
+     * Validate CSRF token with proper state management
      */
     public function validateToken(string $token, ?string $action = 'default', bool $oneTime = true): bool
     {
@@ -71,13 +85,33 @@ final readonly class CsrfProtection
             return false;
         }
 
-        // Mark as used for one-time tokens
-        if ($oneTime) {
+        // DON'T mark as used here - let caller do it on success
+        return true;
+    }
+
+    /**
+     * Mark token as used after successful processing
+     */
+    public function consumeToken(?string $action = 'default'): void
+    {
+        $tokens = $this->getStoredTokens();
+
+        if (isset($tokens[$action])) {
             $tokens[$action]['used'] = true;
             $this->session->set(self::SESSION_KEY, $tokens);
         }
+    }
 
-        return true;
+    /**
+     * Validate and consume token in one operation (convenience method)
+     */
+    public function validateAndConsume(string $token, ?string $action = 'default'): bool
+    {
+        if ($this->validateToken($token, $action, true)) {
+            $this->consumeToken($action);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -90,7 +124,7 @@ final readonly class CsrfProtection
     }
 
     /**
-     * Get or generate token for action
+     * Get or generate token for action with automatic cleanup
      */
     public function token(?string $action = 'default'): string
     {
@@ -127,14 +161,13 @@ final readonly class CsrfProtection
     }
 
     /**
-     * Validate token from request
+     * Updated request validation with proper token consumption
      */
     public function validateFromRequest(
         \Framework\Http\Request $request,
         ?string                 $action = 'default',
-        bool                    $oneTime = true
-    ): bool
-    {
+        bool                    $consume = true
+    ): bool {
         // Try different token sources
         $token = $request->input('_token')
             ?? $request->header('x-csrf-token')
@@ -144,7 +177,14 @@ final readonly class CsrfProtection
             return false;
         }
 
-        return $this->validateToken($token, $action, $oneTime);
+        if ($this->validateToken($token, $action, $consume)) {
+            if ($consume) {
+                $this->consumeToken($action);
+            }
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -166,20 +206,24 @@ final readonly class CsrfProtection
     }
 
     /**
-     * Clean expired tokens
+     * Auto-cleanup with configurable lifetime
      */
-    public function cleanExpiredTokens(int $maxAge = 3600): void
+    public function cleanExpiredTokens(int $maxAge = self::TOKEN_LIFETIME): void
     {
         $tokens = $this->getStoredTokens();
         $now = time();
+        $cleaned = false;
 
         foreach ($tokens as $action => $data) {
             if ($now - $data['created_at'] > $maxAge) {
                 unset($tokens[$action]);
+                $cleaned = true;
             }
         }
 
-        $this->session->set(self::SESSION_KEY, $tokens);
+        if ($cleaned) {
+            $this->session->set(self::SESSION_KEY, $tokens);
+        }
     }
 
     /**
@@ -191,9 +235,9 @@ final readonly class CsrfProtection
     }
 
     /**
-     * Check if token is expired
+     * Updated expiration check with configurable lifetime
      */
-    private function isTokenExpired(?string $action = 'default', int $maxAge = 3600): bool
+    private function isTokenExpired(?string $action = 'default', int $maxAge = self::TOKEN_LIFETIME): bool
     {
         $tokens = $this->getStoredTokens();
 
