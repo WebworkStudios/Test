@@ -414,14 +414,14 @@ final class Request
     /**
      * Get parameter as URL (validated) with optional default
      */
-    public function url(string $key, string $default = ''): string
+    public function urlParam(string $key, string $default = ''): string  // Umbenennung von url() zu urlParam()
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         $filtered = filter_var($value, FILTER_VALIDATE_URL);
         return $filtered !== false ? $filtered : $default;
     }
