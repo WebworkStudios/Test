@@ -13,16 +13,16 @@ use RecursiveCallbackFilterIterator;
 /**
  * Route Discovery Engine for attribute-based route registration
  */
-final class RouteDiscovery
+final class RouteDiscovery // Entfernt 'readonly' da Properties modifiziert werden
 {
     private array $classCache;
-    private array $ignoredDirectories;
+    private readonly array $ignoredDirectories;
 
     public function __construct(
-        private Router $router,
+        private readonly Router $router,
         array $ignoredDirectories = ['vendor', 'node_modules', '.git', 'storage', 'cache', 'tests']
     ) {
-        $this->classCache = [];
+        $this->classCache = []; // Initialisierung im Constructor
         $this->ignoredDirectories = $ignoredDirectories;
     }
 
@@ -116,7 +116,7 @@ final class RouteDiscovery
         }
 
         $classes = $this->extractClassNames($content);
-        $this->classCache[$fileHash] = $classes;
+        $this->classCache[$fileHash] = $classes; // Jetzt möglich da Klasse nicht readonly ist
 
         foreach ($classes as $className) {
             $this->registerClass($className);
@@ -184,5 +184,13 @@ final class RouteDiscovery
             'cached_files' => count($this->classCache),
             'ignored_directories' => $this->ignoredDirectories
         ];
+    }
+
+    /**
+     * Clear cache for testing or forced re-discovery
+     */
+    public function clearCache(): void
+    {
+        $this->classCache = [];
     }
 }
