@@ -22,22 +22,31 @@ final class Router
     private array $compiledRoutes = [];
     private bool $routesCompiled = false;
 
-    // Sicherheits-Konfiguration
-    private readonly array $allowedSubdomains;
-    private readonly string $baseDomain;
-    private readonly bool $strictSubdomainMode;
+    private readonly bool $debugMode;
+
+    // Security configuration with PHP 8.4 property hooks
+    public readonly array $allowedSubdomains;
+    public readonly string $baseDomain;
+    public readonly bool $strictSubdomainMode;
 
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly ?RouteCache $cache = null,
+        private readonly ?RouteDiscovery $discovery = null,
         array $config = []
     ) {
-        // Sichere Konfiguration
+        $this->debugMode = $config['debug'] ?? $this->detectDebugMode();
+        // Secure configuration
         $this->allowedSubdomains = $config['allowed_subdomains'] ?? ['api', 'admin', 'www'];
         $this->baseDomain = $config['base_domain'] ?? $this->detectBaseDomain();
         $this->strictSubdomainMode = $config['strict_subdomain_mode'] ?? true;
 
         $this->loadCachedRoutes();
+
+        // Auto-discovery if configured
+        if ($this->discovery !== null && ($config['auto_discovery'] ?? false)) {
+            $this->autoDiscoverRoutes($config['discovery_paths'] ?? ['app/Actions', 'app/Controllers']);
+        }
     }
 
     /**
@@ -51,9 +60,7 @@ final class Router
         ?string $name = null,
         ?string $subdomain = null
     ): void {
-        // Umfassende Sicherheitsvalidierung
         $this->validateSecureInput($method, $path, $actionClass, $middleware, $name, $subdomain);
-
         $this->validateActionClass($actionClass);
 
         $routeInfo = RouteInfo::fromPath($method, $path, $actionClass, $middleware, $name, $subdomain);
@@ -76,7 +83,6 @@ final class Router
      */
     public function dispatch(Request $request): Response
     {
-        // Sichere Request-Validierung
         $this->validateRequestSecurity($request);
 
         $method = $request->method;
@@ -119,7 +125,6 @@ final class Router
      */
     public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
     {
-        // Sichere Input-Validierung
         if (strlen($path) > 2048 || str_contains($path, "\0")) {
             return false;
         }
@@ -147,7 +152,6 @@ final class Router
      */
     public function url(string $name, array $params = [], ?string $subdomain = null): string
     {
-        // Input-Validierung
         if (strlen($name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
             throw new \InvalidArgumentException("Invalid route name: {$name}");
         }
@@ -159,7 +163,7 @@ final class Router
         $routeInfo = $this->namedRoutes[$name];
         $path = $routeInfo->originalPath;
 
-        // Sichere Parameter-Ersetzung
+        // Secure parameter replacement
         foreach ($params as $key => $value) {
             $sanitizedKey = $this->sanitizeParameterKey($key);
             $sanitizedValue = $this->sanitizeParameterValue($value);
@@ -170,7 +174,7 @@ final class Router
             throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
         }
 
-        // Sichere URL-Generierung mit Subdomain
+        // Secure URL generation with subdomain
         $routeSubdomain = $subdomain ?? $routeInfo->subdomain;
         if ($routeSubdomain !== null) {
             $validatedSubdomain = $this->validateSubdomainInput($routeSubdomain);
@@ -178,6 +182,70 @@ final class Router
         }
 
         return $path;
+    }
+
+    /**
+     * Auto-discover routes using RouteDiscovery
+     */
+    public function autoDiscoverRoutes(array $directories): void
+    {
+        if ($this->discovery === null) {
+            throw new \RuntimeException('RouteDiscovery not configured');
+        }
+
+        try {
+            $this->discovery->discover($directories);
+
+            $stats = $this->discovery->getStats();
+            error_log("Route discovery completed: {$stats['discovered_routes']} routes from {$stats['processed_files']} files");
+
+        } catch (\Throwable $e) {
+            error_log("Route discovery failed: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Manual route discovery for specific directories
+     */
+    public function discoverRoutes(array $directories): array
+    {
+        if ($this->discovery === null) {
+            throw new \RuntimeException('RouteDiscovery not configured');
+        }
+
+        $statsBefore = $this->discovery->getStats();
+        $this->discovery->discover($directories);
+        $statsAfter = $this->discovery->getStats();
+
+        return [
+            'discovered_routes' => $statsAfter['discovered_routes'] - $statsBefore['discovered_routes'],
+            'processed_files' => $statsAfter['processed_files'] - $statsBefore['processed_files']
+        ];
+    }
+
+    /**
+     * Get discovery statistics
+     */
+    public function getDiscoveryStats(): ?array
+    {
+        return $this->discovery?->getStats();
+    }
+
+    /**
+     * Clear discovery cache
+     */
+    public function clearDiscoveryCache(): void
+    {
+        $this->discovery?->clearCache();
+    }
+
+    /**
+     * Get all registered routes
+     */
+    public function getRoutes(): array
+    {
+        return $this->routes;
     }
 
     /**
@@ -191,35 +259,35 @@ final class Router
         ?string $name,
         ?string $subdomain
     ): void {
-        // Method Validierung
+        // Method validation
         $allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
         if (!in_array(strtoupper($method), $allowedMethods, true)) {
             throw new \InvalidArgumentException("Invalid HTTP method: {$method}");
         }
 
-        // Path Validierung
+        // Path validation
         if (strlen($path) > 2048 || !str_starts_with($path, '/')) {
             throw new \InvalidArgumentException("Invalid path: {$path}");
         }
 
-        // Action Class Validierung
+        // Action Class validation
         if (strlen($actionClass) > 255 || !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*$/', $actionClass)) {
             throw new \InvalidArgumentException("Invalid action class: {$actionClass}");
         }
 
-        // Middleware Validierung
+        // Middleware validation
         foreach ($middleware as $mw) {
             if (!is_string($mw) || strlen($mw) > 100 || !preg_match('/^[a-zA-Z0-9_.-]+$/', $mw)) {
                 throw new \InvalidArgumentException("Invalid middleware: {$mw}");
             }
         }
 
-        // Name Validierung
+        // Name validation
         if ($name !== null && (strlen($name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $name))) {
             throw new \InvalidArgumentException("Invalid route name: {$name}");
         }
 
-        // Subdomain Validierung
+        // Subdomain validation
         if ($subdomain !== null) {
             $this->validateSubdomainInput($subdomain);
         }
@@ -230,18 +298,15 @@ final class Router
      */
     private function validateRequestSecurity(Request $request): void
     {
-        // Host Header Validation (gegen Host Header Injection)
         $host = $request->host();
         if (!$this->isValidHost($host)) {
             throw new \InvalidArgumentException("Invalid host header: {$host}");
         }
 
-        // Path Length Check
         if (strlen($request->path) > 2048) {
             throw new \InvalidArgumentException("Request path too long");
         }
 
-        // Null Byte Check
         if (str_contains($request->path, "\0") || str_contains($request->uri, "\0")) {
             throw new \InvalidArgumentException("Request contains null bytes");
         }
@@ -252,21 +317,19 @@ final class Router
      */
     private function isValidHost(string $host): bool
     {
-        // Port entfernen falls vorhanden
         $hostWithoutPort = explode(':', $host)[0];
 
-        // IP-Adressen validieren
+        // Validate IP addresses
         if (filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
-            // Nur lokale IPs in Development erlauben
             return filter_var($hostWithoutPort, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
         }
 
-        // Domain-Format validieren
+        // Validate domain format
         if (!preg_match('/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $hostWithoutPort) && $hostWithoutPort !== 'localhost') {
             return false;
         }
 
-        // Base Domain Check
+        // Base domain check
         $parts = explode('.', $hostWithoutPort);
         if (count($parts) >= 2) {
             $domain = implode('.', array_slice($parts, -2));
@@ -283,25 +346,21 @@ final class Router
     {
         $hostWithoutPort = explode(':', $host)[0];
 
-        // Localhost oder IP - keine Subdomain
         if ($hostWithoutPort === 'localhost' || filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
             return null;
         }
 
         $parts = explode('.', $hostWithoutPort);
-
         if (count($parts) < 3) {
             return null;
         }
 
         $subdomain = $parts[0];
 
-        // Sicherheitsvalidierung
         if (!$this->isValidSubdomain($subdomain)) {
             throw new \InvalidArgumentException("Invalid subdomain: {$subdomain}");
         }
 
-        // Strict Mode: Nur erlaubte Subdomains
         if ($this->strictSubdomainMode && !in_array($subdomain, $this->allowedSubdomains, true)) {
             throw new \InvalidArgumentException("Subdomain not allowed: {$subdomain}");
         }
@@ -314,17 +373,14 @@ final class Router
      */
     private function isValidSubdomain(string $subdomain): bool
     {
-        // Längen-Check
         if (strlen($subdomain) > 63 || strlen($subdomain) === 0) {
             return false;
         }
 
-        // RFC 1123 hostname validation
         if (!preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain)) {
             return false;
         }
 
-        // Gefährliche Zeichen und Sequenzen
         if (preg_match('/[<>"\'\0]/', $subdomain)) {
             return false;
         }
@@ -337,13 +393,9 @@ final class Router
      */
     private function sanitizePath(string $path): string
     {
-        // Entferne gefährliche Zeichen
         $cleaned = preg_replace('/[^\w\-_\/{}.]/', '', $path);
-
-        // Directory Traversal Prevention
         $cleaned = str_replace(['../', '.\\', '..\\'], '', $cleaned);
 
-        // Ensure starts with /
         if (!str_starts_with($cleaned, '/')) {
             $cleaned = '/' . $cleaned;
         }
@@ -402,12 +454,10 @@ final class Router
      */
     private function buildSecureUrl(string $subdomain, string $path): string
     {
-        // Validiere finalen Subdomain nochmal
         if (!$this->isValidSubdomain($subdomain)) {
             throw new \InvalidArgumentException("Invalid subdomain for URL: {$subdomain}");
         }
 
-        // Validiere Base Domain
         if (!preg_match('/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $this->baseDomain) && $this->baseDomain !== 'localhost') {
             throw new \InvalidArgumentException("Invalid base domain: {$this->baseDomain}");
         }
@@ -423,9 +473,8 @@ final class Router
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
         $hostWithoutPort = explode(':', $host)[0];
 
-        // Validate host
         if (!$this->isValidHostForDetection($hostWithoutPort)) {
-            return 'localhost'; // Fallback für Sicherheit
+            return 'localhost';
         }
 
         $parts = explode('.', $hostWithoutPort);
@@ -442,17 +491,14 @@ final class Router
      */
     private function isValidHostForDetection(string $host): bool
     {
-        // IP-Adressen ablehnen
         if (filter_var($host, FILTER_VALIDATE_IP)) {
             return false;
         }
 
-        // Localhost erlauben
         if ($host === 'localhost') {
             return true;
         }
 
-        // Domain-Format validieren
         return preg_match('/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $host) === 1;
     }
 
@@ -481,25 +527,21 @@ final class Router
      */
     private function validateActionClass(string $actionClass): void
     {
-        // Existenz-Check
         if (!class_exists($actionClass)) {
             throw new \InvalidArgumentException("Action class {$actionClass} does not exist");
         }
 
         $reflection = new \ReflectionClass($actionClass);
 
-        // Invokability Check
         if (!$reflection->hasMethod('__invoke')) {
             throw new \InvalidArgumentException("Action class {$actionClass} must be invokable");
         }
 
-        // Sicherheits-Checks: Gefährliche Klassen blocken
+        // Security checks: Block dangerous classes
         $dangerousPatterns = [
             'Reflection', 'PDO', 'mysqli', 'SQLite3', 'DirectoryIterator',
             'SplFileObject', 'SplFileInfo', 'SimpleXMLElement', 'DOMDocument',
-            'XMLReader', 'XMLWriter', 'ZipArchive', 'Phar', 'SplFileInfo',
-            'RecursiveDirectoryIterator', 'FilesystemIterator', 'GlobIterator',
-            'SplTempFileObject', 'SplFileObject', 'finfo', 'Imagick'
+            'XMLReader', 'XMLWriter', 'ZipArchive', 'Phar'
         ];
 
         foreach ($dangerousPatterns as $pattern) {
@@ -508,7 +550,7 @@ final class Router
             }
         }
 
-        // Namespace-Whitelist (strenger)
+        // Namespace whitelist
         $allowedNamespaces = [
             'App\\Actions\\',
             'App\\Controllers\\',
@@ -528,7 +570,6 @@ final class Router
             throw new \InvalidArgumentException("Action class not in allowed namespace: {$actionClass}");
         }
 
-        // Zusätzliche Sicherheitsprüfungen
         $this->validateActionClassSecurity($reflection);
     }
 
@@ -537,7 +578,7 @@ final class Router
      */
     private function validateActionClassSecurity(\ReflectionClass $reflection): void
     {
-        // Prüfe auf gefährliche Methoden
+        // Check for dangerous methods
         $dangerousMethods = [
             'exec', 'system', 'shell_exec', 'passthru', 'eval', 'file_get_contents',
             'file_put_contents', 'fopen', 'fwrite', 'include', 'require',
@@ -551,12 +592,10 @@ final class Router
             }
         }
 
-        // Prüfe auf Serializable Interface (potenzielle Deserialization-Angriffe)
         if ($reflection->implementsInterface('Serializable')) {
             throw new \InvalidArgumentException("Action class implements Serializable interface (security risk)");
         }
 
-        // Prüfe auf final class (Best Practice für Action Classes)
         if (!$reflection->isFinal()) {
             error_log("Warning: Action class {$reflection->getName()} should be final for security");
         }
@@ -572,9 +611,8 @@ final class Router
         }
 
         foreach ($this->routes as $method => $routes) {
-            // Sortierung für Sicherheit und Performance
             usort($routes, function(RouteInfo $a, RouteInfo $b): int {
-                // 1. Subdomain-spezifische Routen zuerst (präziser)
+                // Subdomain-specific routes first
                 $aHasSubdomain = $a->subdomain !== null;
                 $bHasSubdomain = $b->subdomain !== null;
 
@@ -582,7 +620,7 @@ final class Router
                     return $aHasSubdomain ? -1 : 1;
                 }
 
-                // 2. Statische Routen vor parametrischen
+                // Static routes before parametric
                 $aHasParams = !empty($a->paramNames);
                 $bHasParams = !empty($b->paramNames);
 
@@ -590,7 +628,7 @@ final class Router
                     return $aHasParams ? 1 : -1;
                 }
 
-                // 3. Kürzere Pfade zuerst
+                // Shorter paths first
                 return strlen($a->originalPath) <=> strlen($b->originalPath);
             });
 
@@ -599,7 +637,6 @@ final class Router
 
         $this->routesCompiled = true;
 
-        // Cache nur speichern wenn sicher
         if ($this->cache !== null && $this->isSecureCacheEnvironment()) {
             $this->cache->store($this->compiledRoutes);
         }
@@ -610,17 +647,22 @@ final class Router
      */
     private function isSecureCacheEnvironment(): bool
     {
-        // Prüfe ob wir in einer sicheren Umgebung sind
-        // (nicht in Debug-Mode, korrekter Cache-Pfad, etc.)
         return !($this->isDebugMode() || $this->isUnsafeEnvironment());
     }
 
-    /**
-     * Check if in debug mode
-     */
     private function isDebugMode(): bool
     {
-        return defined('APP_DEBUG') && APP_DEBUG === true;
+        return $this->debugMode;
+    }
+
+    private function detectDebugMode(): bool
+    {
+        return match(true) {
+            defined('APP_DEBUG') && APP_DEBUG === true => true,
+            ($_ENV['APP_DEBUG'] ?? '') === 'true' => true,
+            ($_SERVER['APP_DEBUG'] ?? '') === 'true' => true,
+            default => false
+        };
     }
 
     /**
@@ -628,7 +670,6 @@ final class Router
      */
     private function isUnsafeEnvironment(): bool
     {
-        // Prüfe auf Development-Umgebung
         $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? 'production';
         return in_array($env, ['development', 'dev', 'local', 'testing'], true);
     }
@@ -654,24 +695,17 @@ final class Router
      */
     private function validateCachedRoutes(array $cached): bool
     {
-        // Basis-Validierung der Cache-Struktur
         if (!is_array($cached)) {
             return false;
         }
 
-        // Validiere jede Route im Cache
         foreach ($cached as $method => $routes) {
             if (!is_string($method) || !is_array($routes)) {
                 return false;
             }
 
             foreach ($routes as $route) {
-                if (!($route instanceof RouteInfo)) {
-                    return false;
-                }
-
-                // Zusätzliche Sicherheitsvalidierung
-                if (!$this->isValidCachedRoute($route)) {
+                if (!($route instanceof RouteInfo) || !$this->isValidCachedRoute($route)) {
                     return false;
                 }
             }
@@ -685,17 +719,14 @@ final class Router
      */
     private function isValidCachedRoute(RouteInfo $route): bool
     {
-        // Validiere Action Class existiert noch
         if (!class_exists($route->actionClass)) {
             return false;
         }
 
-        // Validiere Pattern ist sicher
         if (str_contains($route->pattern, '(?') || strlen($route->pattern) > 1000) {
             return false;
         }
 
-        // Validiere Subdomain falls vorhanden
         if ($route->subdomain !== null && !$this->isValidSubdomain($route->subdomain)) {
             return false;
         }
@@ -708,30 +739,22 @@ final class Router
      */
     private function callAction(string $actionClass, Request $request, array $params): Response
     {
-        // Finale Sicherheitsvalidierung vor Action-Aufruf
         $this->validateActionInvocation($actionClass, $request, $params);
 
-        // Resolve action from container
         $action = $this->container->get($actionClass);
 
-        // Security: Validiere dass Container korrekte Instanz zurückgibt
         if (!is_object($action) || get_class($action) !== $actionClass) {
             throw new \RuntimeException("Container returned invalid action instance");
         }
 
-        // Security: Validiere dass Action invokable ist
         if (!is_callable($action)) {
             throw new \RuntimeException("Action {$actionClass} is not invokable");
         }
 
         try {
-            // Call action with security monitoring
             $result = $this->executeActionSecurely($action, $request, $params);
-
-            // Convert result to Response if needed
             return $this->convertToResponse($result);
         } catch (\Throwable $e) {
-            // Log security-relevant errors
             error_log("Action execution error: " . $e->getMessage());
             throw $e;
         }
@@ -742,19 +765,16 @@ final class Router
      */
     private function validateActionInvocation(string $actionClass, Request $request, array $params): void
     {
-        // Validiere Parameter-Anzahl (DoS Prevention)
         if (count($params) > 20) {
             throw new \InvalidArgumentException("Too many route parameters");
         }
 
-        // Validiere Parameter-Größe
         foreach ($params as $key => $value) {
             if (strlen($key) > 50 || strlen((string)$value) > 1000) {
                 throw new \InvalidArgumentException("Parameter too large: {$key}");
             }
         }
 
-        // Request-Größe validieren
         if (strlen($request->raw()) > 10485760) { // 10MB
             throw new \InvalidArgumentException("Request body too large");
         }
@@ -765,22 +785,18 @@ final class Router
      */
     private function executeActionSecurely(object $action, Request $request, array $params): mixed
     {
-        // Memory limit monitoring
         $memoryBefore = memory_get_usage(true);
-
-        // Execution time monitoring
         $timeBefore = microtime(true);
 
         try {
-            $result = $action($request, $params);
+            // Expliziter __invoke Aufruf statt direkter Objektaufruf
+            $result = $action->__invoke($request, $params);
 
-            // Check execution time (DoS prevention)
             $executionTime = microtime(true) - $timeBefore;
             if ($executionTime > 30) { // 30 seconds max
                 error_log("Action execution too slow: {$executionTime}s");
             }
 
-            // Check memory usage (DoS prevention)
             $memoryUsed = memory_get_usage(true) - $memoryBefore;
             if ($memoryUsed > 134217728) { // 128MB
                 error_log("Action used too much memory: " . ($memoryUsed / 1024 / 1024) . "MB");
@@ -811,7 +827,6 @@ final class Router
      */
     private function createSecureJsonResponse(array|object $data): Response
     {
-        // Größen-Validierung
         $json = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         if (strlen($json) > 10485760) { // 10MB limit
@@ -826,22 +841,12 @@ final class Router
      */
     private function sanitizeHtmlOutput(string $html): string
     {
-        // Basis HTML-Escaping
         $escaped = htmlspecialchars($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
 
-        // Größen-Validierung
         if (strlen($escaped) > 10485760) { // 10MB
             throw new \RuntimeException("HTML response too large");
         }
 
         return $escaped;
-    }
-
-    /**
-     * Get all registered routes
-     */
-    public function getRoutes(): array
-    {
-        return $this->routes;
     }
 }
