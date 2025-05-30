@@ -13,7 +13,7 @@ use RecursiveCallbackFilterIterator;
 /**
  * Route Discovery Engine for attribute-based route registration
  */
-final readonly class RouteDiscovery
+final class RouteDiscovery
 {
     private array $classCache;
     private array $ignoredDirectories;

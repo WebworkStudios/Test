@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
-use Framework\Container\Container;
+use Framework\Container\ContainerInterface;
 use Framework\Http\{Request, Response};
 use Framework\Routing\Exceptions\{RouteNotFoundException, MethodNotAllowedException};
 
@@ -22,13 +22,11 @@ final class Router
     // Performance-Optimierung: Route-Caching
     private array $compiledRoutes = [];
     private bool $routesCompiled = false;
-    private ?RouteCache $cache = null;
 
     public function __construct(
-        private readonly Container $container,
-        ?RouteCache $cache = null
+        private readonly ContainerInterface $container,
+        private readonly ?RouteCache $cache = null
     ) {
-        $this->cache = $cache ?? new RouteCache();
         $this->loadCachedRoutes();
     }
 
@@ -47,6 +45,8 @@ final class Router
 
         $routeInfo = RouteInfo::fromPath($method, $path, $actionClass, $middleware, $name);
 
+        // Initialisiere Array falls nicht vorhanden
+        $this->routes[$method] ??= [];
         $this->routes[$method][] = $routeInfo;
 
         if ($name !== null) {
@@ -67,34 +67,25 @@ final class Router
     public function dispatch(Request $request): Response
     {
         $method = $request->method;
-        $path = $request->uri;
+        $path = $request->path; // Verwende path statt uri für saubere Routen
 
         // Kompiliere Routen für bessere Performance
         $this->compileRoutes();
 
+        // Sammle verfügbare Methoden für diese Route
+        $availableMethods = $this->getAvailableMethodsForPath($path);
+
         if (!isset($this->compiledRoutes[$method])) {
-            // Sammle verfügbare Methoden für bessere Fehlermeldung
-            $availableMethods = array_keys($this->compiledRoutes);
-
-            if (empty($availableMethods)) {
-                throw new MethodNotAllowedException("Method {$method} not allowed");
+            if (!empty($availableMethods)) {
+                throw new MethodNotAllowedException(
+                    "Method {$method} not allowed. Available methods: " . implode(', ', $availableMethods),
+                    $availableMethods
+                );
             }
-
-            // Prüfe ob Route für andere Methoden existiert
-            foreach ($availableMethods as $availableMethod) {
-                foreach ($this->compiledRoutes[$availableMethod] as $routeInfo) {
-                    if ($routeInfo->matches($availableMethod, $path)) {
-                        throw new MethodNotAllowedException(
-                            "Method {$method} not allowed. Available methods: " . implode(', ', $availableMethods)
-                        );
-                    }
-                }
-            }
-
-            throw new MethodNotAllowedException("Method {$method} not allowed");
+            throw new RouteNotFoundException("No routes found for method {$method}");
         }
 
-        // Verbessertes Matching mit Early Return
+        // Verbesserte Route-Matching mit Early Return
         foreach ($this->compiledRoutes[$method] as $routeInfo) {
             if ($routeInfo->matches($method, $path)) {
                 $params = $routeInfo->extractParams($path);
@@ -102,7 +93,34 @@ final class Router
             }
         }
 
+        if (!empty($availableMethods)) {
+            throw new MethodNotAllowedException(
+                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
+                $availableMethods
+            );
+        }
+
         throw new RouteNotFoundException("Route not found: {$method} {$path}");
+    }
+
+    /**
+     * Get available HTTP methods for a given path
+     */
+    private function getAvailableMethodsForPath(string $path): array
+    {
+        $this->compileRoutes();
+        $methods = [];
+
+        foreach ($this->compiledRoutes as $method => $routes) {
+            foreach ($routes as $routeInfo) {
+                if ($routeInfo->matches($method, $path)) {
+                    $methods[] = $method;
+                    break; // Ein Match pro Methode reicht
+                }
+            }
+        }
+
+        return $methods;
     }
 
     /**
@@ -127,8 +145,6 @@ final class Router
 
     /**
      * Get all registered routes
-     *
-     * @return array<string, array<RouteInfo>>
      */
     public function getRoutes(): array
     {
@@ -136,7 +152,7 @@ final class Router
     }
 
     /**
-     * Generate URL for named route - FIXED
+     * Generate URL for named route
      */
     public function url(string $name, array $params = []): string
     {
@@ -145,8 +161,6 @@ final class Router
         }
 
         $routeInfo = $this->namedRoutes[$name];
-
-        // Verwende Original-Path für URL-Generation
         $path = $routeInfo->originalPath;
 
         // Ersetze Parameter im Original-Path
@@ -155,7 +169,7 @@ final class Router
         }
 
         // Prüfe ob alle Parameter ersetzt wurden
-        if (preg_match('/\{[^}]+\}/', $path)) {
+        if (preg_match('/{[^}]+}/', $path)) {
             throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
         }
 
@@ -179,21 +193,19 @@ final class Router
         }
 
         // Sicherheitsprüfung: Keine System-Klassen
-        $dangerousClasses = [
-            'ReflectionClass', 'ReflectionFunction', 'ReflectionMethod',
-            'PDO', 'mysqli', 'SQLite3',
-            'DirectoryIterator', 'RecursiveDirectoryIterator',
-            'SplFileObject', 'SplFileInfo'
+        $dangerousPatterns = [
+            'Reflection', 'PDO', 'mysqli', 'SQLite3', 'DirectoryIterator',
+            'SplFileObject', 'SplFileInfo', 'SimpleXMLElement'
         ];
 
-        foreach ($dangerousClasses as $dangerous) {
-            if (str_starts_with($actionClass, $dangerous)) {
+        foreach ($dangerousPatterns as $pattern) {
+            if (str_contains($actionClass, $pattern)) {
                 throw new \InvalidArgumentException("Invalid action class: {$actionClass}");
             }
         }
 
-        // Prüfe Namespace-Whitelist (optional - kann konfiguriert werden)
-        $allowedNamespaces = ['App\\Actions\\', 'App\\Controllers\\'];
+        // Namespace-Validierung
+        $allowedNamespaces = ['App\\Actions\\', 'App\\Controllers\\', 'App\\Http\\'];
         $isAllowed = false;
 
         foreach ($allowedNamespaces as $namespace) {
@@ -218,10 +230,7 @@ final class Router
         }
 
         foreach ($this->routes as $method => $routes) {
-            $this->compiledRoutes[$method] = [];
-
             // Sortiere Routen: Statische zuerst, dann Parameter-Routen
-            // Das verbessert die Performance da statische Routen häufiger sind
             usort($routes, function(RouteInfo $a, RouteInfo $b): int {
                 $aHasParams = !empty($a->paramNames);
                 $bHasParams = !empty($b->paramNames);
@@ -238,8 +247,6 @@ final class Router
         }
 
         $this->routesCompiled = true;
-
-        // Cache aktualisieren
         $this->cache?->store($this->compiledRoutes);
     }
 
@@ -276,16 +283,10 @@ final class Router
         $result = $action($request, $params);
 
         // Convert result to Response if needed
-        if ($result instanceof Response) {
-            return $result;
-        }
-
-        // Auto-convert arrays/objects to JSON
-        if (is_array($result) || is_object($result)) {
-            return Response::json($result);
-        }
-
-        // Convert strings to HTML response
-        return Response::html((string) $result);
+        return match(true) {
+            $result instanceof Response => $result,
+            is_array($result) || is_object($result) => Response::json($result),
+            default => Response::html((string) $result)
+        };
     }
 }
