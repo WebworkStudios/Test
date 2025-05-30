@@ -12,6 +12,7 @@ final readonly class RouteInfo
     /**
      * @param string $method HTTP method
      * @param string $pattern Compiled regex pattern
+     * @param string $originalPath Original path pattern for URL generation
      * @param array<string> $paramNames Parameter names extracted from path
      * @param string $actionClass Action class name
      * @param array<string> $middleware Route middleware
@@ -20,6 +21,7 @@ final readonly class RouteInfo
     public function __construct(
         public string $method,
         public string $pattern,
+        public string $originalPath,
         public array $paramNames,
         public string $actionClass,
         public array $middleware = [],
@@ -29,7 +31,7 @@ final readonly class RouteInfo
     /**
      * Create RouteInfo from path pattern
      */
-    public function fromPath(
+    public static function fromPath(
         string $method,
         string $path,
         string $actionClass,
@@ -37,21 +39,21 @@ final readonly class RouteInfo
         ?string $name = null
     ): self {
         $paramNames = [];
-        
-        // Convert /user/{id}/posts/{postId} to regex pattern
+
+        // Verbesserte Regex für komplexere Parameter
         $pattern = preg_replace_callback(
-            '/\{([^}]+)\}/',
+            '/\{([a-zA-Z_][a-zA-Z0-9_]*)}/',
             function ($matches) use (&$paramNames) {
                 $paramNames[] = $matches[1];
                 return '([^/]+)';
             },
             $path
         );
-        
-        // Escape forward slashes and add anchors
+
+        // Sicherere Pattern-Erstellung
         $pattern = '#^' . str_replace('/', '\/', $pattern) . '$#';
-        
-        return new self($method, $pattern, $paramNames, $actionClass, $middleware, $name);
+
+        return new self($method, $pattern, $path, $paramNames, $actionClass, $middleware, $name);
     }
 
     /**
@@ -63,18 +65,34 @@ final readonly class RouteInfo
     }
 
     /**
-     * Extract parameters from matched path
+     * Extract parameters from matched path with security validation
      */
     public function extractParams(string $path): array
     {
         if (!preg_match($this->pattern, $path, $matches)) {
             return [];
         }
-        
-        // Remove full match from results
+
         array_shift($matches);
-        
-        // Combine parameter names with values
-        return array_combine($this->paramNames, $matches) ?: [];
+
+        $params = array_combine($this->paramNames, $matches) ?: [];
+
+        // Validiere Parameter-Werte für Sicherheit
+        foreach ($params as $name => $value) {
+            // Verhindere Directory Traversal
+            if (str_contains($value, '..') || str_contains($value, '\0')) {
+                throw new \InvalidArgumentException("Invalid parameter value: {$name}");
+            }
+
+            // Längen-Begrenzung
+            if (strlen($value) > 255) {
+                throw new \InvalidArgumentException("Parameter too long: {$name}");
+            }
+
+            // URL-decode parameter
+            $params[$name] = urldecode($value);
+        }
+
+        return $params;
     }
 }
