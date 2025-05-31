@@ -89,6 +89,10 @@ final class Router
         $path = $this->sanitizePath($request->path);
         $subdomain = $this->extractSecureSubdomain($request->host());
 
+        if ($this->debugMode) {
+            error_log("Router: Dispatching {$method} {$path} with subdomain: " . ($subdomain ?? 'none'));
+        }
+
         $this->compileRoutes();
 
         $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
@@ -104,6 +108,10 @@ final class Router
         }
 
         foreach ($this->compiledRoutes[$method] as $routeInfo) {
+            if ($this->debugMode) {
+                error_log("Router: Checking route {$routeInfo->originalPath} with subdomain: " . ($routeInfo->subdomain ?? 'none'));
+            }
+
             if ($routeInfo->matches($method, $path, $subdomain)) {
                 $params = $routeInfo->extractParams($path);
                 return $this->callAction($routeInfo->actionClass, $request, $params);
@@ -117,7 +125,8 @@ final class Router
             );
         }
 
-        throw new RouteNotFoundException("Route not found: {$method} {$path}");
+        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
+            ($subdomain ? " (subdomain: {$subdomain})" : ""));
     }
 
     /**
@@ -350,11 +359,27 @@ final class Router
     {
         $hostWithoutPort = explode(':', $host)[0];
 
+        // Localhost und IP-Adressen haben keine Subdomain
         if ($hostWithoutPort === 'localhost' || filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
             return null;
         }
 
         $parts = explode('.', $hostWithoutPort);
+
+        // KORREKTUR: Bessere Subdomain-Erkennung
+        // Format: subdomain.domain.tld (3+ parts) oder subdomain.localhost (spezial)
+        if (str_ends_with($hostWithoutPort, '.localhost')) {
+            // api.localhost -> 'api'
+            if (count($parts) >= 2 && $parts[count($parts) - 1] === 'localhost') {
+                $subdomain = $parts[0];
+                if ($this->isValidSubdomain($subdomain)) {
+                    return $subdomain;
+                }
+            }
+            return null;
+        }
+
+        // Normale Domain: subdomain.example.com
         if (count($parts) < 3) {
             return null;
         }
@@ -747,8 +772,16 @@ final class Router
 
         $action = $this->container->get($actionClass);
 
-        if (!is_object($action) || get_class($action) !== $actionClass) {
-            throw new \RuntimeException("Container returned invalid action instance");
+        if ($action === null) {
+            throw new \RuntimeException("Container returned null for action {$actionClass}");
+        }
+
+        if (!is_object($action)) {
+            throw new \RuntimeException("Container returned invalid action instance for {$actionClass}");
+        }
+
+        if (!($action instanceof $actionClass) && get_class($action) !== $actionClass) {
+            throw new \RuntimeException("Container returned wrong action type for {$actionClass}");
         }
 
         if (!is_callable($action)) {
@@ -756,10 +789,25 @@ final class Router
         }
 
         try {
+            // DEBUG: Parameter-Validierung vor Aufruf
+            if ($this->debugMode) {
+                error_log(sprintf(
+                    "Router: Calling action %s with request %s %s and %d params: %s",
+                    $actionClass,
+                    $request->method,
+                    $request->path,
+                    count($params),
+                    json_encode($params)
+                ));
+            }
+
             $result = $this->executeActionSecurely($action, $request, $params);
             return $this->convertToResponse($result);
         } catch (\Throwable $e) {
-            error_log("Action execution error: " . $e->getMessage());
+            if ($this->debugMode) {
+                error_log("Action execution error in {$actionClass}: " . $e->getMessage());
+                error_log("Stack trace: " . $e->getTraceAsString());
+            }
             throw $e;
         }
     }
@@ -793,6 +841,10 @@ final class Router
         $timeBefore = microtime(true);
 
         try {
+            // KORREKTUR: Expliziter __invoke Aufruf mit korrekten Parametern
+            if (!method_exists($action, '__invoke')) {
+                throw new \RuntimeException("Action is not invokable");
+            }
 
             $result = $action->__invoke($request, $params);
 
@@ -809,7 +861,16 @@ final class Router
             return $result;
 
         } catch (\Throwable $e) {
-            error_log("Action execution failed: " . get_class($action) . " - " . $e->getMessage());
+            // Debug-Info hinzufügen
+            $debug = sprintf(
+                "Action execution failed: %s - %s (Request: %s %s, Params: %s)",
+                get_class($action),
+                $e->getMessage(),
+                $request->method,
+                $request->path,
+                json_encode($params)
+            );
+            error_log($debug);
             throw $e;
         }
     }
