@@ -72,8 +72,8 @@ final readonly class RouteInfo
             throw new \InvalidArgumentException("Invalid path pattern: {$path}");
         }
 
-        // Sichere Pattern-Erstellung mit Escaping
-        $escapedPattern = '#^' . str_replace(['/', '(', ')', '[', ']'], ['\/', '\(', '\)', '\[', '\]'], $pattern) . '$#D';
+        // KORREKTUR: Sichere Pattern-Erstellung OHNE doppeltes Escaping
+        $escapedPattern = '#^' . str_replace('/', '\/', $pattern) . '$#D';
 
         return new self(
             $method,
