@@ -117,11 +117,11 @@ final readonly class RouteInfo
     }
 
     /**
-     * Extract parameters from matched path with comprehensive security validation
+     * Optimized parameter extraction with better caching
      */
     public function extractParams(string $path): array
     {
-        // Input-Validierung
+        // Input-Validierung (unverändert)
         if (strlen($path) > 2048) {
             throw new \InvalidArgumentException('Path too long');
         }
@@ -130,11 +130,13 @@ final readonly class RouteInfo
             throw new \InvalidArgumentException('Path contains null byte');
         }
 
-        if (!preg_match($this->pattern, $path, $matches)) {
+        // PERFORMANCE: Use preg_match with PREG_OFFSET_CAPTURE für bessere Performance
+        if (!preg_match($this->pattern, $path, $matches, PREG_OFFSET_CAPTURE)) {
             return [];
         }
 
-        array_shift($matches); // Entferne Full-Match
+        // Remove full match
+        array_shift($matches);
 
         if (count($matches) !== count($this->paramNames)) {
             throw new \InvalidArgumentException('Parameter count mismatch');
@@ -142,16 +144,67 @@ final readonly class RouteInfo
 
         $params = [];
 
-        for ($i = 0; $i < count($this->paramNames); $i++) {
-            $name = $this->paramNames[$i];
-            $value = $matches[$i] ?? '';
+        // PERFORMANCE: Direkte Array-Zugriffe statt Schleifen wo möglich
+        foreach ($this->paramNames as $i => $name) {
+            $value = $matches[$i][0] ?? '';
 
-            // Umfassende Sicherheitsvalidierung für jeden Parameter
-            $sanitizedValue = $this->sanitizeParameter($name, $value);
+            // Optimierte Validierung pro Parameter-Typ
+            $sanitizedValue = $this->fastSanitizeParameter($name, $value);
             $params[$name] = $sanitizedValue;
         }
 
         return $params;
+    }
+
+    /**
+     * Fast parameter sanitization with type-specific optimization
+     */
+    private function fastSanitizeParameter(string $name, string $value): string
+    {
+        // Basale Sicherheitschecks (optimiert)
+        if (strlen($value) > 255) {
+            throw new \InvalidArgumentException("Parameter '{$name}' too long");
+        }
+
+        // PERFORMANCE: Kombinierte Regex für häufige Probleme
+        if (preg_match('/[\x00-\x1F\x7F]|\.\./', $value)) {
+            throw new \InvalidArgumentException("Parameter '{$name}' contains invalid characters");
+        }
+
+        // URL-decode
+        $decoded = urldecode($value);
+
+        // Schnelle Post-Decode Validierung
+        if (str_contains($decoded, '..') || str_contains($decoded, "\0")) {
+            throw new \InvalidArgumentException("Parameter '{$name}' invalid after decoding");
+        }
+
+        // PERFORMANCE: Optimierte typ-spezifische Validierung
+        $this->fastValidateParameterByName($name, $decoded);
+
+        return $decoded;
+    }
+
+    /**
+     * Fast parameter validation by name pattern
+     */
+    private function fastValidateParameterByName(string $name, string $value): void
+    {
+        // PERFORMANCE: Pattern matching statt string comparison
+        if (preg_match('/^(.*?id|.*?Id)$/', $name)) {
+            if (!preg_match('/^\d+$/', $value) || (int)$value <= 0 || (int)$value > PHP_INT_MAX) {
+                throw new \InvalidArgumentException("Parameter '{$name}' must be a valid positive integer");
+            }
+        } elseif (preg_match('/^(slug|username)$/', $name)) {
+            if (!preg_match('/^[a-zA-Z0-9\-_]+$/', $value)) {
+                throw new \InvalidArgumentException("Parameter '{$name}' contains invalid characters");
+            }
+        } elseif ($name === 'email') {
+            if (!filter_var($value, FILTER_VALIDATE_EMAIL)) {
+                throw new \InvalidArgumentException("Parameter '{$name}' is not a valid email");
+            }
+        }
+
     }
 
     /**
