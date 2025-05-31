@@ -92,22 +92,23 @@ final readonly class RouteInfo
      */
     public function matches(string $method, string $path, ?string $requestSubdomain = null): bool
     {
-        // Sichere Input-Validierung
-        if (strlen($path) > 2048) {
-            return false; // Zu lange Pfade ablehnen
-        }
-
-        if (str_contains($path, "\0") || str_contains($path, '..')) {
-            return false; // Gefährliche Zeichen ablehnen
-        }
-
-        // HTTP-Method und Path prüfen
-        if (!($this->method === $method && preg_match($this->pattern, $path))) {
+        // Early exit für falsche HTTP-Methode
+        if ($this->method !== $method) {
             return false;
         }
 
-        // Sichere Subdomain-Validierung
-        return $this->matchesSubdomain($requestSubdomain);
+        // Sichere Input-Validierung (bereits vorhanden)
+        if (strlen($path) > 2048 || str_contains($path, "\0") || str_contains($path, '..')) {
+            return false;
+        }
+
+        // Subdomain-Check VOR Pattern-Match für bessere Performance
+        if (!$this->matchesSubdomain($requestSubdomain)) {
+            return false;
+        }
+
+        // Pattern-Match als letzter (teuerster) Check
+        return preg_match($this->pattern, $path) === 1;
     }
 
     /**
