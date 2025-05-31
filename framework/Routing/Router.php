@@ -324,8 +324,13 @@ final class Router
             return filter_var($hostWithoutPort, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
         }
 
+        // Allow localhost and *.localhost for development
+        if ($hostWithoutPort === 'localhost' || str_ends_with($hostWithoutPort, '.localhost')) {
+            return true;
+        }
+
         // Validate domain format
-        if (!preg_match('/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $hostWithoutPort) && $hostWithoutPort !== 'localhost') {
+        if (!preg_match('/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $hostWithoutPort)) {
             return false;
         }
 
@@ -333,12 +338,11 @@ final class Router
         $parts = explode('.', $hostWithoutPort);
         if (count($parts) >= 2) {
             $domain = implode('.', array_slice($parts, -2));
-            return $domain === $this->baseDomain || $hostWithoutPort === 'localhost';
+            return $domain === $this->baseDomain;
         }
 
-        return $hostWithoutPort === 'localhost';
+        return false;
     }
-
     /**
      * Extract and validate subdomain securely
      */
@@ -789,16 +793,16 @@ final class Router
         $timeBefore = microtime(true);
 
         try {
-            // Expliziter __invoke Aufruf statt direkter Objektaufruf
+
             $result = $action->__invoke($request, $params);
 
             $executionTime = microtime(true) - $timeBefore;
-            if ($executionTime > 30) { // 30 seconds max
+            if ($executionTime > 30) {
                 error_log("Action execution too slow: {$executionTime}s");
             }
 
             $memoryUsed = memory_get_usage(true) - $memoryBefore;
-            if ($memoryUsed > 134217728) { // 128MB
+            if ($memoryUsed > 134217728) {
                 error_log("Action used too much memory: " . ($memoryUsed / 1024 / 1024) . "MB");
             }
 
