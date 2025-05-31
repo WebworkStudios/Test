@@ -915,8 +915,9 @@ namespace {
             if (isset($this->services[$id])) {
                 $service = $this->services[$id];
 
-                // If it's a callable, invoke it
-                if (is_callable($service)) {
+                // FIX: Nur aufrufen wenn es tatsächlich eine Factory-Funktion ist
+                // Nicht bei Objekten die bereits instantiiert sind
+                if (is_callable($service) && !is_object($service)) {
                     return $service();
                 }
 

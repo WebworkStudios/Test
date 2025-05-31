@@ -766,6 +766,9 @@ final class Router
     /**
      * Call action with enhanced security
      */
+    /**
+     * Call action with enhanced security
+     */
     private function callAction(string $actionClass, Request $request, array $params): Response
     {
         $this->validateActionInvocation($actionClass, $request, $params);
@@ -801,7 +804,8 @@ final class Router
                 ));
             }
 
-            $result = $this->executeActionSecurely($action, $request, $params);
+            // FIX: Direkter callable Aufruf
+            $result = $action($request, $params);
             return $this->convertToResponse($result);
         } catch (\Throwable $e) {
             if ($this->debugMode) {
@@ -829,49 +833,6 @@ final class Router
 
         if (strlen($request->raw()) > 10485760) { // 10MB
             throw new \InvalidArgumentException("Request body too large");
-        }
-    }
-
-    /**
-     * Execute action with security monitoring
-     */
-    private function executeActionSecurely(object $action, Request $request, array $params): mixed
-    {
-        $memoryBefore = memory_get_usage(true);
-        $timeBefore = microtime(true);
-
-        try {
-            // KORREKTUR: Expliziter __invoke Aufruf mit korrekten Parametern
-            if (!method_exists($action, '__invoke')) {
-                throw new \RuntimeException("Action is not invokable");
-            }
-
-            $result = $action->__invoke($request, $params);
-
-            $executionTime = microtime(true) - $timeBefore;
-            if ($executionTime > 30) {
-                error_log("Action execution too slow: {$executionTime}s");
-            }
-
-            $memoryUsed = memory_get_usage(true) - $memoryBefore;
-            if ($memoryUsed > 134217728) {
-                error_log("Action used too much memory: " . ($memoryUsed / 1024 / 1024) . "MB");
-            }
-
-            return $result;
-
-        } catch (\Throwable $e) {
-            // Debug-Info hinzufügen
-            $debug = sprintf(
-                "Action execution failed: %s - %s (Request: %s %s, Params: %s)",
-                get_class($action),
-                $e->getMessage(),
-                $request->method,
-                $request->path,
-                json_encode($params)
-            );
-            error_log($debug);
-            throw $e;
         }
     }
 
