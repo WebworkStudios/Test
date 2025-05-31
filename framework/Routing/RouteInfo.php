@@ -92,22 +92,27 @@ final readonly class RouteInfo
      */
     public function matches(string $method, string $path, ?string $requestSubdomain = null): bool
     {
-        // Early exit für falsche HTTP-Methode
+        // 1. Method check first (fastest)
         if ($this->method !== $method) {
             return false;
         }
 
-        // Sichere Input-Validierung (bereits vorhanden)
+        // 2. Static route fast path
+        if (empty($this->paramNames)) {
+            return $this->originalPath === $path && $this->matchesSubdomain($requestSubdomain);
+        }
+
+        // 3. Input validation (security)
         if (strlen($path) > 2048 || str_contains($path, "\0") || str_contains($path, '..')) {
             return false;
         }
 
-        // Subdomain-Check VOR Pattern-Match für bessere Performance
+        // 4. Subdomain check before expensive regex
         if (!$this->matchesSubdomain($requestSubdomain)) {
             return false;
         }
 
-        // Pattern-Match als letzter (teuerster) Check
+        // 5. Pattern match als letzter Check
         return preg_match($this->pattern, $path) === 1;
     }
 

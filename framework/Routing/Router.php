@@ -103,18 +103,18 @@ final class Router
             throw new RouteNotFoundException("No routes found for method {$method}");
         }
 
-        // PERFORMANCE: Fast-Path für exakte statische Matches
+        // PERFORMANCE ENHANCEMENT: Optimized route matching
         foreach ($this->compiledRoutes[$method] as $routeInfo) {
-            // Statische Routes ohne Parameter: direkter String-Vergleich
+            // Fast path für statische Routes (keine Regex nötig)
             if (empty($routeInfo->paramNames)) {
                 if ($routeInfo->originalPath === $path &&
                     $this->matchesSubdomain($routeInfo->subdomain, $subdomain)) {
                     return $this->callAction($routeInfo->actionClass, $request, []);
                 }
-                continue; // Skip pattern matching für statische Routes
+                continue;
             }
 
-            // Parametrische Routes: normaler Pattern-Match
+            // Slow path für parametrische Routes
             if ($routeInfo->matches($method, $path, $subdomain)) {
                 $params = $routeInfo->extractParams($path);
                 return $this->callAction($routeInfo->actionClass, $request, $params);
@@ -647,6 +647,9 @@ final class Router
      * Compile routes with security optimization
      */
 // In Router.php - Verbesserte compileRoutes() Methode
+    /**
+     * Enhanced route compilation with better sorting
+     */
     private function compileRoutes(): void
     {
         if ($this->routesCompiled) {
@@ -654,33 +657,34 @@ final class Router
         }
 
         foreach ($this->routes as $method => $routes) {
-            // PHP 8.4 Performance: Optimierte Sortierung mit early returns
+            // PERFORMANCE: Optimierte Sortierung mit Prioritätssystem
             usort($routes, function(RouteInfo $a, RouteInfo $b): int {
-                // Statische Routes haben absolute Priorität
+                // 1. Statische Routes zuerst (höchste Priorität)
                 $aIsStatic = empty($a->paramNames);
                 $bIsStatic = empty($b->paramNames);
 
-                if ($aIsStatic && !$bIsStatic) return -1;
-                if (!$aIsStatic && $bIsStatic) return 1;
-
-                // Bei beiden statisch: alphabetisch für Konsistenz
-                if ($aIsStatic && $bIsStatic) {
-                    return strcmp($a->originalPath, $b->originalPath);
+                if ($aIsStatic !== $bIsStatic) {
+                    return $aIsStatic ? -1 : 1;
                 }
 
-                // Bei beiden parametrisch: weniger Parameter zuerst
-                $paramDiff = count($a->paramNames) - count($b->paramNames);
-                if ($paramDiff !== 0) return $paramDiff;
-
-                // Subdomain-spezifische Routes vor generischen
-                $aHasSubdomain = $a->subdomain !== null;
-                $bHasSubdomain = $b->subdomain !== null;
-                if ($aHasSubdomain !== $bHasSubdomain) {
-                    return $aHasSubdomain ? -1 : 1;
+                // 2. Subdomain-Routes vor generischen (bei gleichen Typ)
+                if ($a->subdomain !== $b->subdomain) {
+                    if ($a->subdomain !== null && $b->subdomain === null) return -1;
+                    if ($a->subdomain === null && $b->subdomain !== null) return 1;
                 }
 
-                // Kürzere Pfade zuerst (weniger Regex-Komplexität)
-                return strlen($a->originalPath) <=> strlen($b->originalPath);
+                // 3. Bei parametrischen Routes: weniger Parameter zuerst
+                if (!$aIsStatic && !$bIsStatic) {
+                    $paramDiff = count($a->paramNames) - count($b->paramNames);
+                    if ($paramDiff !== 0) return $paramDiff;
+                }
+
+                // 4. Kürzere Pfade zuerst (Performance)
+                $pathLengthDiff = strlen($a->originalPath) - strlen($b->originalPath);
+                if ($pathLengthDiff !== 0) return $pathLengthDiff;
+
+                // 5. Alphabetische Sortierung für Konsistenz
+                return strcmp($a->originalPath, $b->originalPath);
             });
 
             $this->compiledRoutes[$method] = $routes;
