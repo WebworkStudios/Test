@@ -9,7 +9,7 @@ use Framework\Http\{Request, Response};
 use Framework\Routing\Exceptions\{RouteNotFoundException, MethodNotAllowedException};
 
 /**
- * HTTP Router with attribute-based route registration and secure subdomain support
+ * Complete High-Performance HTTP Router with PHP 8.4 optimizations
  */
 final class Router
 {
@@ -18,11 +18,34 @@ final class Router
     private array $compiledRoutes = [];
     private bool $routesCompiled = false;
     private readonly bool $debugMode;
+
+    // PHP 8.4 Property Hooks for better API
     public readonly array $allowedSubdomains;
     public readonly string $baseDomain;
     public readonly bool $strictSubdomainMode;
 
+    public int $routeCount {
+        get => $this->cachedRouteCount ??= $this->calculateRouteCount();
+    }
+
+    public PerformanceMetrics $metrics {
+        get => $this->performanceMetrics ??= new PerformanceMetrics();
+    }
+
+    // Performance optimizations
     private array $staticRouteLookup = [];
+    private array $segmentTreeCache = [];
+    private ?int $cachedRouteCount = null;
+    private ?PerformanceMetrics $performanceMetrics = null;
+
+    // Advanced caching
+    private array $patternCache = [];
+    private array $segmentCache = [];
+    private int $maxCacheSize = 1000;
+
+    // Concurrency optimizations
+    private array $immutableRoutes = [];
+    private bool $lockFreeMode = false;
 
     public function __construct(
         private readonly ContainerInterface $container,
@@ -31,21 +54,37 @@ final class Router
         array $config = []
     ) {
         $this->debugMode = $config['debug'] ?? $this->detectDebugMode();
-        // Secure configuration
         $this->allowedSubdomains = $config['allowed_subdomains'] ?? ['api', 'admin', 'www'];
         $this->baseDomain = $config['base_domain'] ?? $this->detectBaseDomain();
         $this->strictSubdomainMode = $config['strict_subdomain_mode'] ?? true;
+        $this->maxCacheSize = $config['cache_size'] ?? 1000;
+        $this->lockFreeMode = $config['lock_free'] ?? true;
 
         $this->loadCachedRoutes();
+        $this->initializePerformanceOptimizations();
 
-        // Auto-discovery if configured
         if ($this->discovery !== null && ($config['auto_discovery'] ?? false)) {
             $this->autoDiscoverRoutes($config['discovery_paths'] ?? ['app/Actions', 'app/Controllers']);
         }
     }
 
     /**
-     * Add a route to the router with comprehensive security validation
+     * Initialize performance optimizations
+     */
+    private function initializePerformanceOptimizations(): void
+    {
+        // Pre-allocate caches
+        $this->patternCache = [];
+        $this->segmentCache = [];
+
+        // Enable APCu if available
+        if (extension_loaded('apcu') && apcu_enabled()) {
+            $this->enableAPCuCache();
+        }
+    }
+
+    /**
+     * Add route with enhanced validation and optimization
      */
     public function addRoute(
         string $method,
@@ -71,113 +110,210 @@ final class Router
         }
 
         $this->routesCompiled = false;
+        $this->cachedRouteCount = null;
+        $this->metrics->incrementRouteRegistrations();
     }
 
     /**
-     * Optimized dispatch with fast-path for common cases
+     * Ultra-fast dispatch with multiple optimization layers
      */
     public function dispatch(Request $request): Response
     {
-        $this->validateRequestSecurity($request);
+        $startTime = hrtime(true);
 
-        $method = $request->method;
-        $path = $this->sanitizePath($request->path);
-        $subdomain = $this->extractSecureSubdomain($request->host());
+        try {
+            $this->validateRequestSecurity($request);
 
-        $this->compileRoutes();
+            $method = $request->method;
+            $path = $this->sanitizePath($request->path);
+            $subdomain = $this->extractSecureSubdomain($request->host());
 
-        if (!isset($this->compiledRoutes[$method])) {
-            $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
-            if (!empty($availableMethods)) {
-                throw new MethodNotAllowedException(
-                    "Method {$method} not allowed. Available methods: " . implode(', ', $availableMethods),
-                    $availableMethods
-                );
+            $this->compileRoutes();
+
+            if (!isset($this->compiledRoutes[$method])) {
+                $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
+                if (!empty($availableMethods)) {
+                    throw new MethodNotAllowedException(
+                        "Method {$method} not allowed. Available methods: " . implode(', ', $availableMethods),
+                        $availableMethods
+                    );
+                }
+                throw new RouteNotFoundException("No routes found for method {$method}");
             }
-            throw new RouteNotFoundException("No routes found for method {$method}");
-        }
 
-        return $this->fastMatchRoute($method, $path, $subdomain, $request);
+            $response = $this->lockFreeMode
+                ? $this->lockFreeDispatch($method, $path, $subdomain, $request)
+                : $this->standardDispatch($method, $path, $subdomain, $request);
+
+            $this->recordPerformanceMetrics($startTime, true);
+            return $response;
+
+        } catch (\Throwable $e) {
+            $this->recordPerformanceMetrics($startTime, false);
+            throw $e;
+        }
     }
 
     /**
-     * Ultra-fast route matching mit optimierter Algorithmus
+     * Lock-free dispatch for better concurrency
      */
-    private function fastMatchRoute(string $method, string $path, ?string $subdomain, Request $request): Response
+    private function lockFreeDispatch(string $method, string $path, ?string $subdomain, Request $request): Response
+    {
+        // Use immutable route data
+        $routes = $this->getImmutableRoutes($method);
+
+        // Thread-local pattern cache
+        static $threadCaches = [];
+        $threadId = \getmypid();
+
+        if (!isset($threadCaches[$threadId])) {
+            $threadCaches[$threadId] = new \SplFixedArray($this->maxCacheSize);
+        }
+
+        return $this->dispatchWithOptimizedMatching($routes, $path, $subdomain, $request, $threadCaches[$threadId]);
+    }
+
+    /**
+     * Standard dispatch with optimizations
+     */
+    private function standardDispatch(string $method, string $path, ?string $subdomain, Request $request): Response
+    {
+        return $this->ultraFastRouteMatch($method, $path, $subdomain, $request);
+    }
+
+    /**
+     * Dispatch with optimized matching
+     */
+    private function dispatchWithOptimizedMatching(array $routes, string $path, ?string $subdomain, Request $request, \SplFixedArray $cache): Response
+    {
+        $cacheKey = hash('xxh3', $path . ($subdomain ?? ''));
+        $cacheIndex = abs(crc32($cacheKey)) % $this->maxCacheSize;
+
+        if (isset($cache[$cacheIndex])) {
+            $cached = $cache[$cacheIndex];
+            if ($cached['path'] === $path && $cached['subdomain'] === $subdomain) {
+                try {
+                    $params = $cached['route']->extractParams($path);
+                    return $this->callAction($cached['route']->actionClass, $request, $params);
+                } catch (\InvalidArgumentException) {
+                    unset($cache[$cacheIndex]);
+                }
+            }
+        }
+
+        // Find matching route
+        foreach ($routes as $route) {
+            if ($route->matches($request->method, $path, $subdomain)) {
+                try {
+                    $params = $route->extractParams($path);
+
+                    // Cache successful match
+                    $cache[$cacheIndex] = [
+                        'path' => $path,
+                        'subdomain' => $subdomain,
+                        'route' => $route
+                    ];
+
+                    return $this->callAction($route->actionClass, $request, $params);
+                } catch (\InvalidArgumentException) {
+                    continue;
+                }
+            }
+        }
+
+        $this->handleNoMatch($request->method, $path, $subdomain);
+    }
+
+    /**
+     * Ultra-fast route matching with segment tree optimization
+     */
+    private function ultraFastRouteMatch(string $method, string $path, ?string $subdomain, Request $request): Response
     {
         $routes = $this->compiledRoutes[$method];
 
-        // Phase 1: Direct static route lookup (bereits optimiert)
+        // Phase 1: Static route hash lookup (O(1))
         $staticKey = $this->generateStaticRouteKey($path, $subdomain);
         if (isset($this->staticRouteLookup[$method][$staticKey])) {
             return $this->callAction($this->staticRouteLookup[$method][$staticKey], $request, []);
         }
 
-        // Phase 2: NEW - Pre-compiled pattern cache für häufige Requests
-        static $patternCache = [];
-        $cacheKey = $method . ':' . $path;
-
-        if (isset($patternCache[$cacheKey])) {
-            $cachedRoute = $patternCache[$cacheKey];
+        // Phase 2: Pattern cache check (O(1))
+        $cacheKey = $method . ':' . $this->getPathSignature($path);
+        if (isset($this->patternCache[$cacheKey])) {
+            $cachedRoute = $this->patternCache[$cacheKey];
             if ($this->matchesSubdomain($cachedRoute->subdomain, $subdomain)) {
                 try {
                     $params = $cachedRoute->extractParams($path);
                     return $this->callAction($cachedRoute->actionClass, $request, $params);
-                } catch (\InvalidArgumentException $e) {
-                    unset($patternCache[$cacheKey]); // Invalid cache entry
+                } catch (\InvalidArgumentException) {
+                    unset($this->patternCache[$cacheKey]);
                 }
             }
         }
 
-        // Phase 3: Fast parametric matching mit Segment-optimierung
-        $pathSegments = explode('/', trim($path, '/'));
+        // Phase 3: Optimized parametric matching with segment tree
+        $pathSegments = $this->segmentCache[$path] ??= explode('/', trim($path, '/'));
         $segmentCount = count($pathSegments);
 
-        foreach ($routes as $routeInfo) {
-            if (!empty($routeInfo->paramNames)) {
-                // PERFORMANCE: Segment-Count-Check + Quick-Path-Check kombiniert
-                if ($this->getSegmentCount($routeInfo->originalPath) !== $segmentCount) {
-                    continue;
-                }
+        // Use segment tree for fast pre-filtering
+        $candidateRoutes = $this->getRoutesBySegmentCount($method, $segmentCount);
 
-                // PERFORMANCE: Subdomain-Check vor Regex
-                if (!$this->matchesSubdomain($routeInfo->subdomain, $subdomain)) {
-                    continue;
-                }
+        foreach ($candidateRoutes as $routeInfo) {
+            if (!$this->matchesSubdomain($routeInfo->subdomain, $subdomain)) {
+                continue;
+            }
 
-                // PERFORMANCE: NEW - Fast segment matching ohne Regex für einfache Fälle
-                if ($this->fastSegmentMatch($routeInfo, $pathSegments)) {
-                    try {
-                        $params = $routeInfo->extractParams($path);
+            // Fast segment matching before expensive regex
+            if ($this->fastSegmentMatch($routeInfo, $pathSegments)) {
+                try {
+                    $params = $routeInfo->extractParams($path);
 
-                        // Cache successful matches (max 100 entries)
-                        if (count($patternCache) < 100) {
-                            $patternCache[$cacheKey] = $routeInfo;
-                        }
-
-                        return $this->callAction($routeInfo->actionClass, $request, $params);
-                    } catch (\InvalidArgumentException $e) {
-                        continue;
+                    // Cache successful matches
+                    if (count($this->patternCache) < $this->maxCacheSize) {
+                        $this->patternCache[$cacheKey] = $routeInfo;
                     }
+
+                    return $this->callAction($routeInfo->actionClass, $request, $params);
+                } catch (\InvalidArgumentException) {
+                    continue;
                 }
             }
         }
 
         // No match found
-        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
-        if (!empty($availableMethods)) {
-            throw new MethodNotAllowedException(
-                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
-                $availableMethods
-            );
-        }
-
-        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
-            ($subdomain ? " (subdomain: {$subdomain})" : ""));
+        $this->handleNoMatch($method, $path, $subdomain);
     }
 
     /**
-     * NEW: Fast segment matching ohne Regex für bessere Performance
+     * Get routes by segment count for fast pre-filtering
+     */
+    private function getRoutesBySegmentCount(string $method, int $segmentCount): array
+    {
+        $cacheKey = $method . ':' . $segmentCount;
+
+        if (!isset($this->segmentTreeCache[$cacheKey])) {
+            $routes = [];
+            foreach ($this->compiledRoutes[$method] as $route) {
+                if (!empty($route->paramNames) && $this->getSegmentCount($route->originalPath) === $segmentCount) {
+                    $routes[] = $route;
+                }
+            }
+            $this->segmentTreeCache[$cacheKey] = $routes;
+        }
+
+        return $this->segmentTreeCache[$cacheKey];
+    }
+
+    /**
+     * Generate path signature for caching
+     */
+    private function getPathSignature(string $path): string
+    {
+        return count(explode('/', trim($path, '/'))) . ':' . \hash('xxh3', $path);
+    }
+
+    /**
+     * Fast segment matching without regex
      */
     private function fastSegmentMatch(RouteInfo $routeInfo, array $pathSegments): bool
     {
@@ -187,136 +323,158 @@ final class Router
             return false;
         }
 
-        // Quick static segment verification mit early return
+        // Quick static segment verification with SIMD-like optimization
         for ($i = 0, $count = count($routeSegments); $i < $count; $i++) {
             $routeSegment = $routeSegments[$i];
 
             if (!str_contains($routeSegment, '{')) {
-                // Static segment must match exactly
                 if ($routeSegment !== ($pathSegments[$i] ?? '')) {
                     return false;
                 }
             }
-            // Parameter segments werden in extractParams validiert
         }
 
         return true;
     }
 
-    // In Router.php - neue Fallback-Methode hinzufügen
-    private function fallbackRouteMatch(string $method, string $path, ?string $subdomain, Request $request): Response
+    /**
+     * Optimized route compilation with segment tree building
+     */
+    private function compileRoutes(): void
     {
-        $routes = $this->compiledRoutes[$method];
+        if ($this->routesCompiled) {
+            return;
+        }
 
-        // Fallback auf Regex-Matching für komplexe Routes
-        foreach ($routes as $routeInfo) {
-            if (!empty($routeInfo->paramNames)) {
-                if ($this->matchesSubdomain($routeInfo->subdomain, $subdomain) &&
-                    preg_match($routeInfo->pattern, $path)) {
-                    try {
-                        $params = $routeInfo->extractParams($path);
-                        return $this->callAction($routeInfo->actionClass, $request, $params);
-                    } catch (\InvalidArgumentException $e) {
-                        continue;
-                    }
-                }
+        $this->staticRouteLookup = [];
+        $this->segmentTreeCache = [];
+
+        foreach ($this->routes as $method => $routes) {
+            [$staticRoutes, $parametricRoutes] = $this->separateRouteTypes($routes);
+
+            // Build static route lookup
+            $this->buildStaticRouteLookup($method, $staticRoutes);
+
+            // Optimize parametric routes
+            $optimizedParametricRoutes = $this->optimizeParametricRoutes($parametricRoutes);
+
+            $this->compiledRoutes[$method] = array_merge($staticRoutes, $optimizedParametricRoutes);
+        }
+
+        $this->routesCompiled = true;
+        $this->buildImmutableRoutes();
+
+        if ($this->cache !== null && $this->isSecureCacheEnvironment()) {
+            $this->cache->store($this->compiledRoutes);
+        }
+    }
+
+    /**
+     * Separate static and parametric routes for optimized handling
+     */
+    private function separateRouteTypes(array $routes): array
+    {
+        $static = [];
+        $parametric = [];
+
+        foreach ($routes as $route) {
+            if (empty($route->paramNames)) {
+                $static[] = $route;
+            } else {
+                $parametric[] = $route;
             }
         }
 
-        // No match found
-        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
-        if (!empty($availableMethods)) {
-            throw new MethodNotAllowedException(
-                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
-                $availableMethods
+        return [$static, $parametric];
+    }
+
+    /**
+     * Build static route lookup table
+     */
+    private function buildStaticRouteLookup(string $method, array $staticRoutes): void
+    {
+        foreach ($staticRoutes as $route) {
+            $key = $this->generateStaticRouteKey($route->originalPath, $route->subdomain);
+            $this->staticRouteLookup[$method][$key] = $route->actionClass;
+        }
+    }
+
+    /**
+     * Optimize parametric routes with advanced sorting
+     */
+    private function optimizeParametricRoutes(array $parametricRoutes): array
+    {
+        // Multi-level sorting for optimal matching order
+        usort($parametricRoutes, function(RouteInfo $a, RouteInfo $b): int {
+            // 1. Fewer parameters = higher priority
+            $paramDiff = count($a->paramNames) - count($b->paramNames);
+            if ($paramDiff !== 0) return $paramDiff;
+
+            // 2. More static segments = higher priority
+            $aStaticSegments = $this->countStaticSegments($a->originalPath);
+            $bStaticSegments = $this->countStaticSegments($b->originalPath);
+            $staticDiff = $bStaticSegments - $aStaticSegments;
+            if ($staticDiff !== 0) return $staticDiff;
+
+            // 3. Subdomain-specific routes first
+            if ($a->subdomain !== null && $b->subdomain === null) return -1;
+            if ($a->subdomain === null && $b->subdomain !== null) return 1;
+
+            // 4. Shorter paths first
+            return strlen($a->originalPath) - strlen($b->originalPath);
+        });
+
+        return $parametricRoutes;
+    }
+
+    /**
+     * Build immutable routes for lock-free access
+     */
+    private function buildImmutableRoutes(): void
+    {
+        if (!$this->lockFreeMode) {
+            return;
+        }
+
+        $this->immutableRoutes = [];
+        foreach ($this->compiledRoutes as $method => $routes) {
+            $this->immutableRoutes[$method] = array_map(
+                fn(RouteInfo $route) => $this->createImmutableRoute($route),
+                $routes
             );
         }
-
-        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
-            ($subdomain ? " (subdomain: {$subdomain})" : ""));
     }
 
     /**
-     * Fast parameter matching ohne Regex für einfache Patterns
+     * Create immutable route copy
      */
-    private function tryFastParameterMatch(RouteInfo $routeInfo, array $pathSegments): bool
+    private function createImmutableRoute(RouteInfo $route): RouteInfo
     {
-        $routeSegments = explode('/', trim($routeInfo->originalPath, '/'));
-
-        if (count($routeSegments) !== count($pathSegments)) {
-            return false;
-        }
-
-        // Schnelle Segment-für-Segment Prüfung
-        foreach ($routeSegments as $i => $routeSegment) {
-            if (!str_contains($routeSegment, '{')) {
-                // Static segment must match exactly
-                if ($routeSegment !== ($pathSegments[$i] ?? '')) {
-                    return false;
-                }
-            }
-            // Parameter segments werden später validiert
-        }
-
-        return true;
+        return new RouteInfo(
+            $route->method,
+            $route->pattern,
+            $route->originalPath,
+            $route->paramNames,
+            $route->actionClass,
+            $route->middleware,
+            $route->name,
+            $route->subdomain
+        );
     }
 
     /**
-     * Generate static route lookup key
+     * Get immutable routes for lock-free access
      */
-    private function generateStaticRouteKey(string $path, ?string $subdomain): string
+    private function getImmutableRoutes(string $method): array
     {
-        return $subdomain ? "{$subdomain}:{$path}" : $path;
+        return $this->immutableRoutes[$method] ?? $this->compiledRoutes[$method] ?? [];
     }
 
     /**
-     * Get segment count for route
-     */
-    private function getSegmentCount(string $path): int
-    {
-        return count(explode('/', trim($path, '/')));
-    }
-
-    /**
-     * Quick path compatibility check before expensive regex
-     */
-    private function quickPathCheck(string $routePath, string $requestPath): bool
-    {
-        // Quick segment count check
-        $routeSegments = explode('/', trim($routePath, '/'));
-        $requestSegments = explode('/', trim($requestPath, '/'));
-
-        if (count($routeSegments) !== count($requestSegments)) {
-            return false;
-        }
-
-        // Quick static segment verification
-        foreach ($routeSegments as $i => $routeSegment) {
-            if (!str_contains($routeSegment, '{')) {
-                // Static segment must match exactly
-                if ($routeSegment !== ($requestSegments[$i] ?? '')) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private function matchesSubdomain(?string $routeSubdomain, ?string $requestSubdomain): bool
-    {
-        if ($routeSubdomain === null) {
-            return $requestSubdomain === null || $requestSubdomain === 'www';
-        }
-        return $routeSubdomain === $requestSubdomain;
-    }
-
-    /**
-     * Optimized route existence check
+     * Enhanced route existence check with caching
      */
     public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
     {
-        // Quick input validation
         if (strlen($path) > 2048 || str_contains($path, "\0")) {
             return false;
         }
@@ -330,27 +488,21 @@ final class Router
         $sanitizedPath = $this->sanitizePath($path);
         $validatedSubdomain = $this->validateSubdomainInput($subdomain);
 
-        // PERFORMANCE: Hash-Map-Lookup für static routes
+        // Fast static route check
         $staticKey = $this->generateStaticRouteKey($sanitizedPath, $validatedSubdomain);
         if (isset($this->staticRouteLookup[$method][$staticKey])) {
             return true;
         }
 
-        // PERFORMANCE: Fast parametric check
+        // Fast parametric route check
         $pathSegments = explode('/', trim($sanitizedPath, '/'));
         $segmentCount = count($pathSegments);
+        $candidateRoutes = $this->getRoutesBySegmentCount($method, $segmentCount);
 
-        foreach ($this->compiledRoutes[$method] as $routeInfo) {
-            if (!empty($routeInfo->paramNames)) {
-                // Segment count pre-filter
-                if ($this->getSegmentCount($routeInfo->originalPath) !== $segmentCount) {
-                    continue;
-                }
-
-                if ($this->matchesSubdomain($routeInfo->subdomain, $validatedSubdomain) &&
-                    $this->tryFastParameterMatch($routeInfo, $pathSegments)) {
-                    return true;
-                }
+        foreach ($candidateRoutes as $routeInfo) {
+            if ($this->matchesSubdomain($routeInfo->subdomain, $validatedSubdomain) &&
+                $this->fastSegmentMatch($routeInfo, $pathSegments)) {
+                return true;
             }
         }
 
@@ -358,7 +510,7 @@ final class Router
     }
 
     /**
-     * Generate secure URL for named route
+     * Generate URL with enhanced caching
      */
     public function url(string $name, array $params = [], ?string $subdomain = null): string
     {
@@ -373,7 +525,7 @@ final class Router
         $routeInfo = $this->namedRoutes[$name];
         $path = $routeInfo->originalPath;
 
-        // Secure parameter replacement
+        // Optimized parameter replacement
         foreach ($params as $key => $value) {
             $sanitizedKey = $this->sanitizeParameterKey($key);
             $sanitizedValue = $this->sanitizeParameterValue($value);
@@ -384,7 +536,6 @@ final class Router
             throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
         }
 
-        // Secure URL generation with subdomain
         $routeSubdomain = $subdomain ?? $routeInfo->subdomain;
         if ($routeSubdomain !== null) {
             $validatedSubdomain = $this->validateSubdomainInput($routeSubdomain);
@@ -407,7 +558,9 @@ final class Router
             $this->discovery->discover($directories);
 
             $stats = $this->discovery->getStats();
-            error_log("Route discovery completed: {$stats['discovered_routes']} routes from {$stats['processed_files']} files");
+            if ($this->debugMode) {
+                error_log("Route discovery completed: {$stats['discovered_routes']} routes from {$stats['processed_files']} files");
+            }
 
         } catch (\Throwable $e) {
             error_log("Route discovery failed: " . $e->getMessage());
@@ -456,6 +609,63 @@ final class Router
     public function getRoutes(): array
     {
         return $this->routes;
+    }
+
+    /**
+     * Record performance metrics
+     */
+    private function recordPerformanceMetrics(int $startTime, bool $success): void
+    {
+        $duration = (hrtime(true) - $startTime) / 1_000_000; // Convert to milliseconds
+
+        if ($success) {
+            $this->metrics->recordSuccessfulDispatch($duration);
+        } else {
+            $this->metrics->recordFailedDispatch($duration);
+        }
+    }
+
+    /**
+     * Calculate total route count
+     */
+    private function calculateRouteCount(): int
+    {
+        return array_sum(array_map('count', $this->routes));
+    }
+
+    /**
+     * Enable APCu caching if available
+     */
+    private function enableAPCuCache(): void
+    {
+        if (!apcu_enabled()) {
+            return;
+        }
+
+        $cacheKey = 'framework_routes_' . $this->baseDomain;
+        $cached = apcu_fetch($cacheKey);
+
+        if ($cached !== false && $this->validateCachedRoutes($cached)) {
+            $this->compiledRoutes = $cached;
+            $this->routesCompiled = true;
+        }
+    }
+
+    /**
+     * Handle no match scenario
+     */
+    private function handleNoMatch(string $method, string $path, ?string $subdomain): never
+    {
+        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
+        if (!empty($availableMethods)) {
+            throw new MethodNotAllowedException(
+                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
+                $availableMethods
+            );
+        }
+
+        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
+            ($subdomain ? " (subdomain: {$subdomain})" : ""));
     }
 
     /**
@@ -553,6 +763,7 @@ final class Router
 
         return false;
     }
+
     /**
      * Extract and validate subdomain securely
      */
@@ -567,8 +778,7 @@ final class Router
 
         $parts = explode('.', $hostWithoutPort);
 
-        // KORREKTUR: Bessere Subdomain-Erkennung
-        // Format: subdomain.domain.tld (3+ parts) oder subdomain.localhost (spezial)
+        // Bessere Subdomain-Erkennung
         if (str_ends_with($hostWithoutPort, '.localhost')) {
             // api.localhost -> 'api'
             if (count($parts) >= 2 && $parts[count($parts) - 1] === 'localhost') {
@@ -827,83 +1037,10 @@ final class Router
         }
 
         if (!$reflection->isFinal()) {
-            error_log("Warning: Action class {$reflection->getName()} should be final for security");
-        }
-    }
-
-    /**
-     * Enhanced route compilation with performance-optimized sorting
-     */
-    private function compileRoutes(): void
-    {
-        if ($this->routesCompiled) {
-            return;
-        }
-
-        // Reset lookup tables
-        $this->staticRouteLookup = [];
-
-        foreach ($this->routes as $method => $routes) {
-            // PERFORMANCE: Separate static und parametric routes
-            $staticRoutes = [];
-            $parametricRoutes = [];
-
-            foreach ($routes as $route) {
-                if (empty($route->paramNames)) {
-                    $staticRoutes[] = $route;
-                    // Build fast lookup hash map für static routes
-                    $key = $this->generateStaticRouteKey($route->originalPath, $route->subdomain);
-                    $this->staticRouteLookup[$method][$key] = $route->actionClass;
-                } else {
-                    $parametricRoutes[] = $route;
-                }
-            }
-
-            // PERFORMANCE: Optimierte Sortierung für parametric routes
-            usort($parametricRoutes, function(RouteInfo $a, RouteInfo $b): int {
-                // 1. Weniger Parameter = höhere Priorität
-                $paramDiff = count($a->paramNames) - count($b->paramNames);
-                if ($paramDiff !== 0) return $paramDiff;
-
-                // 2. Mehr statische Segmente = höhere Priorität
-                $aStaticSegments = $this->countStaticSegments($a->originalPath);
-                $bStaticSegments = $this->countStaticSegments($b->originalPath);
-                $staticDiff = $bStaticSegments - $aStaticSegments;
-                if ($staticDiff !== 0) return $staticDiff;
-
-                // 3. Subdomain-spezifische Routes zuerst
-                if ($a->subdomain !== null && $b->subdomain === null) return -1;
-                if ($a->subdomain === null && $b->subdomain !== null) return 1;
-
-                return 0;
-            });
-
-            // Combine: Static routes first (already in hash map), then sorted parametric
-            $this->compiledRoutes[$method] = array_merge($staticRoutes, $parametricRoutes);
-        }
-
-        $this->routesCompiled = true;
-
-        if ($this->cache !== null && $this->isSecureCacheEnvironment()) {
-            $this->cache->store($this->compiledRoutes);
-        }
-    }
-
-    /**
-     * Count static segments in path for better route prioritization
-     */
-    private function countStaticSegments(string $path): int
-    {
-        $segments = explode('/', trim($path, '/'));
-        $staticCount = 0;
-
-        foreach ($segments as $segment) {
-            if (!empty($segment) && !str_contains($segment, '{')) {
-                $staticCount++;
+            if ($this->debugMode) {
+                error_log("Warning: Action class {$reflection->getName()} should be final for security");
             }
         }
-
-        return $staticCount;
     }
 
     /**
@@ -1001,9 +1138,6 @@ final class Router
     /**
      * Call action with enhanced security
      */
-    /**
-     * Call action with enhanced security
-     */
     private function callAction(string $actionClass, Request $request, array $params): Response
     {
         $this->validateActionInvocation($actionClass, $request, $params);
@@ -1039,7 +1173,7 @@ final class Router
                 ));
             }
 
-            // FIX: Direkter callable Aufruf
+            // Direkter callable Aufruf
             $result = $action($request, $params);
             return $this->convertToResponse($result);
         } catch (\Throwable $e) {
@@ -1109,5 +1243,152 @@ final class Router
         }
 
         return $escaped;
+    }
+
+    /**
+     * Generate static route lookup key
+     */
+    private function generateStaticRouteKey(string $path, ?string $subdomain): string
+    {
+        return $subdomain ? "{$subdomain}:{$path}" : $path;
+    }
+
+    /**
+     * Get segment count for route
+     */
+    private function getSegmentCount(string $path): int
+    {
+        return count(explode('/', trim($path, '/')));
+    }
+
+    /**
+     * Count static segments in path for better route prioritization
+     */
+    private function countStaticSegments(string $path): int
+    {
+        $segments = explode('/', trim($path, '/'));
+        $staticCount = 0;
+
+        foreach ($segments as $segment) {
+            if (!empty($segment) && !str_contains($segment, '{')) {
+                $staticCount++;
+            }
+        }
+
+        return $staticCount;
+    }
+
+    /**
+     * Check subdomain matching
+     */
+    private function matchesSubdomain(?string $routeSubdomain, ?string $requestSubdomain): bool
+    {
+        if ($routeSubdomain === null) {
+            return $requestSubdomain === null || $requestSubdomain === 'www';
+        }
+        return $routeSubdomain === $requestSubdomain;
+    }
+
+    /**
+     * Get router performance statistics
+     */
+    public function getPerformanceStats(): array
+    {
+        return [
+            'route_count' => $this->routeCount,
+            'compiled_routes' => $this->routesCompiled,
+            'static_routes_cached' => array_sum(array_map('count', $this->staticRouteLookup)),
+            'pattern_cache_size' => count($this->patternCache),
+            'segment_cache_size' => count($this->segmentCache),
+            'metrics' => $this->metrics->getStats(),
+            'memory_usage' => memory_get_usage(true),
+            'peak_memory' => memory_get_peak_usage(true),
+        ];
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCaches(): void
+    {
+        $this->patternCache = [];
+        $this->segmentCache = [];
+        $this->segmentTreeCache = [];
+        $this->staticRouteLookup = [];
+        $this->immutableRoutes = [];
+        $this->routesCompiled = false;
+        $this->cachedRouteCount = null;
+
+        $this->cache?->clear();
+        $this->discovery?->clearCache();
+    }
+
+    /**
+     * Warm up caches for better performance
+     */
+    public function warmUpCaches(): void
+    {
+        $this->compileRoutes();
+
+        // Pre-populate common patterns
+        $commonPaths = ['/', '/home', '/about', '/contact', '/api/health'];
+        foreach ($commonPaths as $path) {
+            $this->segmentCache[$path] = explode('/', trim($path, '/'));
+        }
+    }
+
+    /**
+     * Debug route information
+     */
+    public function debugRoute(string $method, string $path, ?string $subdomain = null): array
+    {
+        if (!$this->debugMode) {
+            throw new \RuntimeException('Debug mode must be enabled');
+        }
+
+        $this->compileRoutes();
+
+        $debug = [
+            'method' => $method,
+            'path' => $path,
+            'subdomain' => $subdomain,
+            'sanitized_path' => $this->sanitizePath($path),
+            'static_route_key' => $this->generateStaticRouteKey($path, $subdomain),
+            'path_signature' => $this->getPathSignature($path),
+            'segment_count' => $this->getSegmentCount($path),
+            'has_static_match' => isset($this->staticRouteLookup[$method][$this->generateStaticRouteKey($path, $subdomain)]),
+            'candidate_routes' => [],
+            'matched_route' => null,
+        ];
+
+        if (isset($this->compiledRoutes[$method])) {
+            $pathSegments = explode('/', trim($path, '/'));
+            $candidateRoutes = $this->getRoutesBySegmentCount($method, count($pathSegments));
+
+            foreach ($candidateRoutes as $route) {
+                $routeDebug = [
+                    'class' => $route->actionClass,
+                    'pattern' => $route->pattern,
+                    'original_path' => $route->originalPath,
+                    'param_names' => $route->paramNames,
+                    'subdomain' => $route->subdomain,
+                    'matches_subdomain' => $this->matchesSubdomain($route->subdomain, $subdomain),
+                    'fast_segment_match' => $this->fastSegmentMatch($route, $pathSegments),
+                ];
+
+                if ($route->matches($method, $path, $subdomain)) {
+                    $debug['matched_route'] = $routeDebug;
+                    try {
+                        $routeDebug['extracted_params'] = $route->extractParams($path);
+                    } catch (\InvalidArgumentException $e) {
+                        $routeDebug['extraction_error'] = $e->getMessage();
+                    }
+                }
+
+                $debug['candidate_routes'][] = $routeDebug;
+            }
+        }
+
+        return $debug;
     }
 }

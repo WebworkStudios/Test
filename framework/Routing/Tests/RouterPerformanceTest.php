@@ -15,6 +15,7 @@ namespace {
     require_once __DIR__ . '/../RouteInfo.php';
     require_once __DIR__ . '/../RouteCache.php';
     require_once __DIR__ . '/../Router.php';
+    require_once __DIR__ . '/../RouteTree.php';
     require_once __DIR__ . '/../../Http/Request.php';
     require_once __DIR__ . '/../../Http/Response.php';
 
