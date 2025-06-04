@@ -106,19 +106,36 @@ final class Router
     private function fastMatchRoute(string $method, string $path, ?string $subdomain, Request $request): Response
     {
         $routes = $this->compiledRoutes[$method];
-        $pathSegments = explode('/', trim($path, '/'));
-        $segmentCount = count($pathSegments);
 
-        // Phase 1: Direct static route lookup mit Hash-Map
+        // Phase 1: Direct static route lookup (bereits optimiert)
         $staticKey = $this->generateStaticRouteKey($path, $subdomain);
         if (isset($this->staticRouteLookup[$method][$staticKey])) {
             return $this->callAction($this->staticRouteLookup[$method][$staticKey], $request, []);
         }
 
-        // Phase 2: Fast parametric matching mit Segment-Count-Filter
+        // Phase 2: NEW - Pre-compiled pattern cache für häufige Requests
+        static $patternCache = [];
+        $cacheKey = $method . ':' . $path;
+
+        if (isset($patternCache[$cacheKey])) {
+            $cachedRoute = $patternCache[$cacheKey];
+            if ($this->matchesSubdomain($cachedRoute->subdomain, $subdomain)) {
+                try {
+                    $params = $cachedRoute->extractParams($path);
+                    return $this->callAction($cachedRoute->actionClass, $request, $params);
+                } catch (\InvalidArgumentException $e) {
+                    unset($patternCache[$cacheKey]); // Invalid cache entry
+                }
+            }
+        }
+
+        // Phase 3: Fast parametric matching mit Segment-optimierung
+        $pathSegments = explode('/', trim($path, '/'));
+        $segmentCount = count($pathSegments);
+
         foreach ($routes as $routeInfo) {
             if (!empty($routeInfo->paramNames)) {
-                // PERFORMANCE: Segment-Count-Check vor allem anderen
+                // PERFORMANCE: Segment-Count-Check + Quick-Path-Check kombiniert
                 if ($this->getSegmentCount($routeInfo->originalPath) !== $segmentCount) {
                     continue;
                 }
@@ -128,10 +145,16 @@ final class Router
                     continue;
                 }
 
-                // PERFORMANCE: Fast-Path für einfache Parameter-Patterns
-                if ($this->tryFastParameterMatch($routeInfo, $pathSegments)) {
+                // PERFORMANCE: NEW - Fast segment matching ohne Regex für einfache Fälle
+                if ($this->fastSegmentMatch($routeInfo, $pathSegments)) {
                     try {
                         $params = $routeInfo->extractParams($path);
+
+                        // Cache successful matches (max 100 entries)
+                        if (count($patternCache) < 100) {
+                            $patternCache[$cacheKey] = $routeInfo;
+                        }
+
                         return $this->callAction($routeInfo->actionClass, $request, $params);
                     } catch (\InvalidArgumentException $e) {
                         continue;
@@ -140,8 +163,44 @@ final class Router
             }
         }
 
-        // Fallback für komplexe Routes
-        return $this->fallbackRouteMatch($method, $path, $subdomain, $request);
+        // No match found
+        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
+        if (!empty($availableMethods)) {
+            throw new MethodNotAllowedException(
+                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
+                $availableMethods
+            );
+        }
+
+        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
+            ($subdomain ? " (subdomain: {$subdomain})" : ""));
+    }
+
+    /**
+     * NEW: Fast segment matching ohne Regex für bessere Performance
+     */
+    private function fastSegmentMatch(RouteInfo $routeInfo, array $pathSegments): bool
+    {
+        $routeSegments = explode('/', trim($routeInfo->originalPath, '/'));
+
+        if (count($routeSegments) !== count($pathSegments)) {
+            return false;
+        }
+
+        // Quick static segment verification mit early return
+        for ($i = 0, $count = count($routeSegments); $i < $count; $i++) {
+            $routeSegment = $routeSegments[$i];
+
+            if (!str_contains($routeSegment, '{')) {
+                // Static segment must match exactly
+                if ($routeSegment !== ($pathSegments[$i] ?? '')) {
+                    return false;
+                }
+            }
+            // Parameter segments werden in extractParams validiert
+        }
+
+        return true;
     }
 
     // In Router.php - neue Fallback-Methode hinzufügen
