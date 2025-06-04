@@ -13,21 +13,16 @@ use Framework\Routing\Exceptions\{RouteNotFoundException, MethodNotAllowedExcept
  */
 final class Router
 {
-    /** @var array<string, array<RouteInfo>> */
     private array $routes = [];
-
-    /** @var array<string, RouteInfo> */
     private array $namedRoutes = [];
-
     private array $compiledRoutes = [];
     private bool $routesCompiled = false;
-
     private readonly bool $debugMode;
-
-    // Security configuration with PHP 8.4 property hooks
     public readonly array $allowedSubdomains;
     public readonly string $baseDomain;
     public readonly bool $strictSubdomainMode;
+
+    private array $staticRouteLookup = [];
 
     public function __construct(
         private readonly ContainerInterface $container,
@@ -102,41 +97,67 @@ final class Router
             throw new RouteNotFoundException("No routes found for method {$method}");
         }
 
-        // PERFORMANCE CRITICAL: Fast-Path für statische Routes
-        $routes = $this->compiledRoutes[$method];
+        return $this->fastMatchRoute($method, $path, $subdomain, $request);
+    }
 
-        // Phase 1: Quick static route lookup
-        foreach ($routes as $routeInfo) {
-            if (empty($routeInfo->paramNames)) {
-                if ($routeInfo->originalPath === $path &&
-                    $this->matchesSubdomain($routeInfo->subdomain, $subdomain)) {
-                    return $this->callAction($routeInfo->actionClass, $request, []);
-                }
-            } else {
-                // Stop at first parametric route - they're sorted after static ones
-                break;
-            }
+    /**
+     * Ultra-fast route matching mit optimierter Algorithmus
+     */
+    private function fastMatchRoute(string $method, string $path, ?string $subdomain, Request $request): Response
+    {
+        $routes = $this->compiledRoutes[$method];
+        $pathSegments = explode('/', trim($path, '/'));
+        $segmentCount = count($pathSegments);
+
+        // Phase 1: Direct static route lookup mit Hash-Map
+        $staticKey = $this->generateStaticRouteKey($path, $subdomain);
+        if (isset($this->staticRouteLookup[$method][$staticKey])) {
+            return $this->callAction($this->staticRouteLookup[$method][$staticKey], $request, []);
         }
 
-        // Phase 2: Parametric routes with optimized matching
+        // Phase 2: Fast parametric matching mit Segment-Count-Filter
         foreach ($routes as $routeInfo) {
             if (!empty($routeInfo->paramNames)) {
-                // Quick pre-checks before expensive regex
-                if (!$this->quickPathCheck($routeInfo->originalPath, $path)) {
+                // PERFORMANCE: Segment-Count-Check vor allem anderen
+                if ($this->getSegmentCount($routeInfo->originalPath) !== $segmentCount) {
                     continue;
                 }
 
+                // PERFORMANCE: Subdomain-Check vor Regex
                 if (!$this->matchesSubdomain($routeInfo->subdomain, $subdomain)) {
                     continue;
                 }
 
-                // Only now do the expensive regex match
-                if (preg_match($routeInfo->pattern, $path, $matches)) {
+                // PERFORMANCE: Fast-Path für einfache Parameter-Patterns
+                if ($this->tryFastParameterMatch($routeInfo, $pathSegments)) {
                     try {
                         $params = $routeInfo->extractParams($path);
                         return $this->callAction($routeInfo->actionClass, $request, $params);
                     } catch (\InvalidArgumentException $e) {
-                        // Parameter validation failed, try next route
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Fallback für komplexe Routes
+        return $this->fallbackRouteMatch($method, $path, $subdomain, $request);
+    }
+
+    // In Router.php - neue Fallback-Methode hinzufügen
+    private function fallbackRouteMatch(string $method, string $path, ?string $subdomain, Request $request): Response
+    {
+        $routes = $this->compiledRoutes[$method];
+
+        // Fallback auf Regex-Matching für komplexe Routes
+        foreach ($routes as $routeInfo) {
+            if (!empty($routeInfo->paramNames)) {
+                if ($this->matchesSubdomain($routeInfo->subdomain, $subdomain) &&
+                    preg_match($routeInfo->pattern, $path)) {
+                    try {
+                        $params = $routeInfo->extractParams($path);
+                        return $this->callAction($routeInfo->actionClass, $request, $params);
+                    } catch (\InvalidArgumentException $e) {
                         continue;
                     }
                 }
@@ -154,6 +175,47 @@ final class Router
 
         throw new RouteNotFoundException("Route not found: {$method} {$path}" .
             ($subdomain ? " (subdomain: {$subdomain})" : ""));
+    }
+
+    /**
+     * Fast parameter matching ohne Regex für einfache Patterns
+     */
+    private function tryFastParameterMatch(RouteInfo $routeInfo, array $pathSegments): bool
+    {
+        $routeSegments = explode('/', trim($routeInfo->originalPath, '/'));
+
+        if (count($routeSegments) !== count($pathSegments)) {
+            return false;
+        }
+
+        // Schnelle Segment-für-Segment Prüfung
+        foreach ($routeSegments as $i => $routeSegment) {
+            if (!str_contains($routeSegment, '{')) {
+                // Static segment must match exactly
+                if ($routeSegment !== ($pathSegments[$i] ?? '')) {
+                    return false;
+                }
+            }
+            // Parameter segments werden später validiert
+        }
+
+        return true;
+    }
+
+    /**
+     * Generate static route lookup key
+     */
+    private function generateStaticRouteKey(string $path, ?string $subdomain): string
+    {
+        return $subdomain ? "{$subdomain}:{$path}" : $path;
+    }
+
+    /**
+     * Get segment count for route
+     */
+    private function getSegmentCount(string $path): int
+    {
+        return count(explode('/', trim($path, '/')));
     }
 
     /**
@@ -209,25 +271,25 @@ final class Router
         $sanitizedPath = $this->sanitizePath($path);
         $validatedSubdomain = $this->validateSubdomainInput($subdomain);
 
-        // PERFORMANCE: Fast-path for static routes first
-        foreach ($this->compiledRoutes[$method] as $routeInfo) {
-            if (empty($routeInfo->paramNames)) {
-                if ($routeInfo->originalPath === $sanitizedPath &&
-                    $this->matchesSubdomain($routeInfo->subdomain, $validatedSubdomain)) {
-                    return true;
-                }
-            } else {
-                // Early exit for static routes section
-                break;
-            }
+        // PERFORMANCE: Hash-Map-Lookup für static routes
+        $staticKey = $this->generateStaticRouteKey($sanitizedPath, $validatedSubdomain);
+        if (isset($this->staticRouteLookup[$method][$staticKey])) {
+            return true;
         }
 
-        // Check parametric routes with quick pre-filtering
+        // PERFORMANCE: Fast parametric check
+        $pathSegments = explode('/', trim($sanitizedPath, '/'));
+        $segmentCount = count($pathSegments);
+
         foreach ($this->compiledRoutes[$method] as $routeInfo) {
             if (!empty($routeInfo->paramNames)) {
-                if ($this->quickPathCheck($routeInfo->originalPath, $sanitizedPath) &&
-                    $this->matchesSubdomain($routeInfo->subdomain, $validatedSubdomain) &&
-                    preg_match($routeInfo->pattern, $sanitizedPath)) {
+                // Segment count pre-filter
+                if ($this->getSegmentCount($routeInfo->originalPath) !== $segmentCount) {
+                    continue;
+                }
+
+                if ($this->matchesSubdomain($routeInfo->subdomain, $validatedSubdomain) &&
+                    $this->tryFastParameterMatch($routeInfo, $pathSegments)) {
                     return true;
                 }
             }
@@ -719,51 +781,46 @@ final class Router
             return;
         }
 
+        // Reset lookup tables
+        $this->staticRouteLookup = [];
+
         foreach ($this->routes as $method => $routes) {
-            // PERFORMANCE CRITICAL: Optimierte Sortierung für bessere Match-Performance
-            usort($routes, function(RouteInfo $a, RouteInfo $b): int {
-                // 1. Exakte statische Pfade haben höchste Priorität
-                $aIsStatic = empty($a->paramNames);
-                $bIsStatic = empty($b->paramNames);
+            // PERFORMANCE: Separate static und parametric routes
+            $staticRoutes = [];
+            $parametricRoutes = [];
 
-                if ($aIsStatic !== $bIsStatic) {
-                    return $aIsStatic ? -1 : 1;
+            foreach ($routes as $route) {
+                if (empty($route->paramNames)) {
+                    $staticRoutes[] = $route;
+                    // Build fast lookup hash map für static routes
+                    $key = $this->generateStaticRouteKey($route->originalPath, $route->subdomain);
+                    $this->staticRouteLookup[$method][$key] = $route->actionClass;
+                } else {
+                    $parametricRoutes[] = $route;
                 }
+            }
 
-                // 2. Bei statischen Routes: Längere Pfade zuerst (spezifischere Matches)
-                if ($aIsStatic && $bIsStatic) {
-                    $lengthDiff = strlen($b->originalPath) - strlen($a->originalPath);
-                    if ($lengthDiff !== 0) return $lengthDiff;
-                    return strcmp($a->originalPath, $b->originalPath);
-                }
+            // PERFORMANCE: Optimierte Sortierung für parametric routes
+            usort($parametricRoutes, function(RouteInfo $a, RouteInfo $b): int {
+                // 1. Weniger Parameter = höhere Priorität
+                $paramDiff = count($a->paramNames) - count($b->paramNames);
+                if ($paramDiff !== 0) return $paramDiff;
 
-                // 3. Bei parametrischen Routes: Weniger Parameter = höhere Priorität
-                if (!$aIsStatic && !$bIsStatic) {
-                    $paramDiff = count($a->paramNames) - count($b->paramNames);
-                    if ($paramDiff !== 0) return $paramDiff;
+                // 2. Mehr statische Segmente = höhere Priorität
+                $aStaticSegments = $this->countStaticSegments($a->originalPath);
+                $bStaticSegments = $this->countStaticSegments($b->originalPath);
+                $staticDiff = $bStaticSegments - $aStaticSegments;
+                if ($staticDiff !== 0) return $staticDiff;
 
-                    // Bei gleicher Parameter-Anzahl: Mehr statische Segmente zuerst
-                    $aStaticSegments = $this->countStaticSegments($a->originalPath);
-                    $bStaticSegments = $this->countStaticSegments($b->originalPath);
-                    $staticDiff = $bStaticSegments - $aStaticSegments;
-                    if ($staticDiff !== 0) return $staticDiff;
+                // 3. Subdomain-spezifische Routes zuerst
+                if ($a->subdomain !== null && $b->subdomain === null) return -1;
+                if ($a->subdomain === null && $b->subdomain !== null) return 1;
 
-                    // Bei gleichen statischen Segmenten: Kürzere Pfade zuerst
-                    $lengthDiff = strlen($a->originalPath) - strlen($b->originalPath);
-                    if ($lengthDiff !== 0) return $lengthDiff;
-                }
-
-                // 4. Subdomain-Routes vor generischen
-                if ($a->subdomain !== $b->subdomain) {
-                    if ($a->subdomain !== null && $b->subdomain === null) return -1;
-                    if ($a->subdomain === null && $b->subdomain !== null) return 1;
-                }
-
-                // 5. Alphabetische Sortierung für Konsistenz
-                return strcmp($a->originalPath, $b->originalPath);
+                return 0;
             });
 
-            $this->compiledRoutes[$method] = $routes;
+            // Combine: Static routes first (already in hash map), then sorted parametric
+            $this->compiledRoutes[$method] = array_merge($staticRoutes, $parametricRoutes);
         }
 
         $this->routesCompiled = true;

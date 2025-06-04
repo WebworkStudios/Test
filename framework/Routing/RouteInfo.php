@@ -166,7 +166,7 @@ final readonly class RouteInfo
             throw new \InvalidArgumentException("Parameter '{$name}' too long");
         }
 
-        // PERFORMANCE: Kombinierte Regex für häufige Probleme
+        // PERFORMANCE: Single regex für alle Control-Chars und Traversal
         if (preg_match('/[\x00-\x1F\x7F]|\.\./', $value)) {
             throw new \InvalidArgumentException("Parameter '{$name}' contains invalid characters");
         }
@@ -174,17 +174,36 @@ final readonly class RouteInfo
         // URL-decode
         $decoded = urldecode($value);
 
-        // Schnelle Post-Decode Validierung
-        if (str_contains($decoded, '..') || str_contains($decoded, "\0")) {
+        // PERFORMANCE: Kombinierte Post-Decode Validierung
+        if (strlen($decoded) > 255 || str_contains($decoded, '..') || str_contains($decoded, "\0")) {
             throw new \InvalidArgumentException("Parameter '{$name}' invalid after decoding");
         }
 
-        // PERFORMANCE: Optimierte typ-spezifische Validierung
-        $this->fastValidateParameterByName($name, $decoded);
+        // PERFORMANCE: Cached parameter validation patterns
+        static $patterns = [
+            'id' => '/^\d+$/',
+            'slug' => '/^[a-zA-Z0-9\-_]+$/',
+            'email' => null // uses filter_var
+        ];
+
+        // Quick pattern-based validation
+        $lowerName = strtolower($name);
+        if (str_ends_with($lowerName, 'id')) {
+            if (!preg_match($patterns['id'], $value) || (int)$value <= 0) {
+                throw new \InvalidArgumentException("Parameter '{$name}' must be a valid positive integer");
+            }
+        } elseif ($lowerName === 'slug' || $lowerName === 'username') {
+            if (!preg_match($patterns['slug'], $value)) {
+                throw new \InvalidArgumentException("Parameter '{$name}' contains invalid characters");
+            }
+        } elseif ($lowerName === 'email') {
+            if (!filter_var($value, FILTER_VALIDATE_EMAIL)) {
+                throw new \InvalidArgumentException("Parameter '{$name}' is not a valid email");
+            }
+        }
 
         return $decoded;
     }
-
     /**
      * Fast parameter validation by name pattern
      */
