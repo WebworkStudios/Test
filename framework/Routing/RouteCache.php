@@ -40,6 +40,8 @@ final class RouteCache
         get => $this->integrityCheck;
     }
 
+    private readonly string $cacheDir;
+
     // Performance tracking
     private int $cacheHits = 0;
     private int $cacheMisses = 0;
@@ -50,7 +52,7 @@ final class RouteCache
     private int $loadOperations = 0;
 
     public function __construct(
-        private readonly string $cacheDir = '',
+        string $cacheDir = '',
         private readonly bool $useCompression = true,
         private readonly int $compressionLevel = 6,
         private readonly bool $integrityCheck = true,
