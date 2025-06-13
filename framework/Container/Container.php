@@ -5,16 +5,29 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 use Framework\Container\Attributes\{Config, Inject};
-use Framework\Container\Lazy\{LazyProxy, GenericLazyProxy};
+use Framework\Container\Lazy\LazyProxy;
 
 /**
- * High-Performance Framework Container
+ * High-Performance Framework Container für PHP 8.4
  *
- * PSR-11 frei, optimiert für unser eigenes Framework.
- * Fokus auf Performance, Security und Developer Experience.
+ * Optimiert für Performance, Security und Developer Experience.
+ * Nutzt moderne PHP 8.4 Features wie Property Hooks und Asymmetric Visibility.
  */
-final class Container
+final class Container implements ContainerInterface
 {
+    // Property Hooks für computed properties
+    public int $serviceCount {
+        get => array_sum(array_map('count', $this->registry['services']));
+    }
+
+    public bool $isCompiled {
+        get => $this->compiled;
+    }
+
+    public array $registeredServices {
+        get => array_keys($this->registry['services']);
+    }
+
     // Konsolidierte Registry für bessere Memory Efficiency
     private array $registry = [
         'services' => [],      // Service definitions
@@ -26,27 +39,28 @@ final class Container
     ];
 
     // Performance Optimierungen
-    private \WeakMap $objectRefs;
     private \WeakMap $reflectionCache;
-    private array $compiledBindings = [];
     private bool $compiled = false;
 
     // Security & Config
     public readonly array $config;
-    private readonly array $allowedPaths;
-    private readonly ServiceDiscovery $discovery;
+    private readonly SecurityValidator $securityValidator;
 
-    public function __construct(array $config = [], array $allowedPaths = [])
-    {
+    public function __construct(
+        array $config = [],
+        array $allowedPaths = []
+    ) {
         $this->config = $config;
-        $this->allowedPaths = $allowedPaths ?: [getcwd()];
-        $this->objectRefs = new \WeakMap();
         $this->reflectionCache = new \WeakMap();
-        $this->discovery = new ServiceDiscovery($this);
+        $this->securityValidator = new SecurityValidator(
+            strictMode: true,
+            allowedPaths: $allowedPaths ?: [getcwd()]
+        );
 
         // Self-registration
         $this->instance(self::class, $this);
         $this->instance(Container::class, $this);
+        $this->instance(ContainerInterface::class, $this);
     }
 
     /**
@@ -54,7 +68,7 @@ final class Container
      */
     public function resolve(string $id, ?string $context = null): mixed
     {
-        if (!$this->isValidServiceId($id)) {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -66,11 +80,6 @@ final class Container
         // Contextual binding check
         if ($context !== null && isset($this->registry['contextual'][$context][$id])) {
             return $this->resolveContextual($context, $id);
-        }
-
-        // Fast path: Compiled bindings
-        if ($this->compiled && isset($this->compiledBindings[$id])) {
-            return $this->executeCompiledBinding($id);
         }
 
         // Lazy services
@@ -145,6 +154,10 @@ final class Container
      */
     private function buildClass(string $className): object
     {
+        if (!$this->securityValidator->isClassNameSafe($className)) {
+            throw ContainerException::securityViolation($className, 'Unsafe class name');
+        }
+
         $reflection = $this->getCachedReflection($className);
 
         if (!$reflection->isInstantiable()) {
@@ -154,20 +167,19 @@ final class Container
             );
         }
 
+        // Security check
+        if (!$this->securityValidator->isClassSecure($reflection)) {
+            throw ContainerException::securityViolation($className, 'Class has security risks');
+        }
+
         $constructor = $reflection->getConstructor();
 
         if ($constructor === null) {
-            $instance = new $className();
-            $this->trackInstance($className, $instance);
-            return $instance;
+            return new $className();
         }
 
         $parameters = $this->resolveParameters($constructor, $className);
-        $instance = $reflection->newInstanceArgs($parameters);
-
-        $this->trackInstance($className, $instance);
-
-        return $instance;
+        return $reflection->newInstanceArgs($parameters);
     }
 
     /**
@@ -343,44 +355,31 @@ final class Container
     {
         // PHP 8.4 Native Lazy Objects wenn verfügbar
         if (method_exists(\ReflectionClass::class, 'newLazyProxy')) {
-            return $this->createNativeLazyProxy($id, $factory);
-        }
+            $initializer = fn() => $factory($this);
 
-        // Fallback für ältere PHP Versionen
-        return $this->createManualLazyProxy($id, $factory);
-    }
+            // Versuche Zielklasse zu ermitteln für typed proxy
+            $targetClass = $this->determineTargetClass($factory);
 
-    /**
-     * PHP 8.4 Native Lazy Proxy
-     */
-    private function createNativeLazyProxy(string $id, callable $factory): object
-    {
-        $initializer = function() use ($factory, $id) {
-            $instance = $factory($this);
-            if (is_object($instance)) {
-                $this->trackInstance($id, $instance);
+            if ($targetClass && class_exists($targetClass)) {
+                $reflection = $this->getCachedReflection($targetClass);
+                return $reflection->newLazyProxy($initializer);
             }
-            return $instance;
-        };
-
-        // Versuche Zielklasse zu ermitteln
-        $targetClass = $this->determineTargetClass($factory);
-
-        if ($targetClass) {
-            $reflection = $this->getCachedReflection($targetClass);
-            return $reflection->newLazyProxy($initializer);
         }
 
-        // Generic Proxy
-        return new GenericLazyProxy($initializer);
+        // Fallback für ältere PHP Versionen oder unbekannte Zielklasse
+        return new LazyProxy($factory, $this, $id);
     }
 
     /**
-     * Fallback Lazy Proxy
+     * Einfache Zielklassen-Ermittlung
      */
-    private function createManualLazyProxy(string $id, callable $factory): LazyProxy
+    private function determineTargetClass(callable $factory): ?string
     {
-        return new LazyProxy($factory, $this, $id);
+        if (is_string($factory) && class_exists($factory)) {
+            return $factory;
+        }
+
+        return null; // Für komplexere Fälle verwenden wir Generic Proxy
     }
 
     // === PUBLIC API ===
@@ -390,7 +389,7 @@ final class Container
      */
     public function bind(string $id, mixed $concrete = null, bool $singleton = false): self
     {
-        if (!$this->isValidServiceId($id)) {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -416,12 +415,16 @@ final class Container
      */
     public function instance(string $id, object $instance): self
     {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
         $this->registry['instances'][$id] = $instance;
         $this->registry['meta'][$id] = [
             'singleton' => true,
             'tags' => []
         ];
-        $this->trackInstance($id, $instance);
+
         return $this;
     }
 
@@ -430,7 +433,7 @@ final class Container
      */
     public function lazy(string $id, callable $factory, bool $singleton = true): self
     {
-        if (!$this->isValidServiceId($id)) {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -453,7 +456,7 @@ final class Container
      */
     public function tag(string $id, string $tag): self
     {
-        if (!$this->isValidServiceId($tag)) {
+        if (!$this->securityValidator->isServiceIdSafe($tag)) {
             throw ContainerException::invalidService($tag, 'Invalid tag format');
         }
 
@@ -536,14 +539,13 @@ final class Container
             'contextual' => []
         ];
 
-        $this->objectRefs = new \WeakMap();
         $this->reflectionCache = new \WeakMap();
-        $this->compiledBindings = [];
         $this->compiled = false;
 
         // Self-registration
         $this->instance(self::class, $this);
         $this->instance(Container::class, $this);
+        $this->instance(ContainerInterface::class, $this);
 
         return $this;
     }
@@ -553,22 +555,12 @@ final class Container
      */
     public function compile(): self
     {
-        $this->compiledBindings = $this->generateCompiledBindings();
         $this->compiled = true;
         return $this;
     }
 
     /**
-     * Auto-discovery
-     */
-    public function autodiscover(array $directories): self
-    {
-        $this->discovery->autodiscover($directories);
-        return $this;
-    }
-
-    /**
-     * Memory cleanup
+     * Memory cleanup für Lazy Objects
      */
     public function gc(): int
     {
@@ -585,105 +577,23 @@ final class Container
         return $cleaned;
     }
 
-    // === PRIVATE HELPER METHODS ===
+    // === ContainerInterface Implementation ===
 
-    private function isValidServiceId(string $id): bool
+    public function get(string $id): mixed
     {
-        return !empty($id) &&
-            !str_contains($id, '..') &&
-            preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $id) === 1;
+        return $this->resolve($id);
     }
+
+    public function has(string $id): bool
+    {
+        return $this->isRegistered($id);
+    }
+
+    // === Private Helper Methods ===
 
     private function isSingleton(string $id): bool
     {
         return $this->registry['meta'][$id]['singleton'] ?? false;
-    }
-
-    public function trackInstance(string $id, object $instance): void
-    {
-        $this->objectRefs[$instance] = [
-            'id' => $id,
-            'created_at' => time()
-        ];
-    }
-
-    private function determineTargetClass(callable $factory): ?string
-    {
-        if (is_string($factory) && class_exists($factory)) {
-            return $factory;
-        }
-
-        if (is_array($factory) && count($factory) === 2) {
-            [$class, $method] = $factory;
-            if (is_string($class) && class_exists($class)) {
-                try {
-                    $reflection = $this->getCachedReflection($class);
-                    $methodReflection = $reflection->getMethod($method);
-                    $returnType = $methodReflection->getReturnType();
-
-                    if ($returnType instanceof \ReflectionNamedType && !$returnType->isBuiltin()) {
-                        return $returnType->getName();
-                    }
-                } catch (\ReflectionException) {
-                    // Ignore
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private function generateCompiledBindings(): array
-    {
-        // Compilation für einfache Klassen-Bindings
-        $compiled = [];
-
-        foreach ($this->registry['services'] as $id => $concrete) {
-            if (is_string($concrete) && class_exists($concrete)) {
-                try {
-                    $reflection = $this->getCachedReflection($concrete);
-                    $constructor = $reflection->getConstructor();
-
-                    // Nur parameterlose Konstruktoren kompilieren
-                    if ($constructor === null || $constructor->getNumberOfParameters() === 0) {
-                        $compiled[$id] = fn() => new $concrete();
-                    }
-                } catch (\ReflectionException) {
-                    // Skip problematische Klassen
-                }
-            }
-        }
-
-        return $compiled;
-    }
-
-    private function executeCompiledBinding(string $id): mixed
-    {
-        $binding = $this->compiledBindings[$id];
-        $instance = $binding();
-
-        if ($this->isSingleton($id)) {
-            $this->registry['instances'][$id] = $instance;
-        }
-
-        $this->trackInstance($id, $instance);
-
-        return $instance;
-    }
-
-    public function isAllowedPath(string $path): bool
-    {
-        $realPath = realpath($path);
-        if ($realPath === false) return false;
-
-        foreach ($this->allowedPaths as $allowedPath) {
-            $realAllowedPath = realpath($allowedPath);
-            if ($realAllowedPath && str_starts_with($realPath, $realAllowedPath)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -691,27 +601,33 @@ final class Container
      */
     public function getStats(): array
     {
-        $activeInstances = 0;
-        foreach ($this->objectRefs as $instance => $info) {
-            $activeInstances++;
-        }
-
         return [
-            'total_services' => count($this->registry['services']),
+            'total_services' => $this->serviceCount,
             'resolved_instances' => count($this->registry['instances']),
             'lazy_services' => count($this->registry['lazy']),
             'contextual_bindings' => array_sum(array_map('count', $this->registry['contextual'])),
-            'compiled' => $this->compiled,
-            'compiled_bindings' => count($this->compiledBindings),
-            'active_instances' => $activeInstances,
-            'memory_usage' => memory_get_usage(true)
+            'compiled' => $this->isCompiled,
+            'memory_usage' => memory_get_usage(true),
+            'registered_services' => $this->registeredServices
+        ];
+    }
+
+    /**
+     * Magic method für debugging
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'service_count' => $this->serviceCount,
+            'is_compiled' => $this->isCompiled,
+            'memory_usage' => memory_get_usage(true),
+            'has_security_validator' => true
         ];
     }
 
     public function __destruct()
     {
         // Cleanup für WeakMaps und Referenzen
-        $this->objectRefs = new \WeakMap();
         $this->reflectionCache = new \WeakMap();
     }
 }
