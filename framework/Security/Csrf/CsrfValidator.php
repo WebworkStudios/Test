@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-namespace Framework\Security;
+namespace Framework\Security\Csrf;
 
 /**
  * Separate CSRF Validierung für bessere Testbarkeit
