@@ -3,7 +3,9 @@
 
 declare(strict_types=1);
 
-namespace Framework\Http;
+namespace framework\Http\Cache;
+
+use Framework\Http\Headers;
 
 /**
  * HTTP Caching utilities

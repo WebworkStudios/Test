@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Framework\Http;
+namespace framework\Http\Cache;
 
 /**
  * HTTP Cookie representation

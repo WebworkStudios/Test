@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
+use framework\Http\Cache\CacheHeaders;
+
 /**
  * HTTP Request with Lazy Loading and optimized structure
  */

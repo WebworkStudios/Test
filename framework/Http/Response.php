@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
+use framework\Http\Cache\CacheHeaders;
+use framework\Http\Cache\Cookie;
 use InvalidArgumentException;
 
 /**

@@ -5,7 +5,7 @@ declare(strict_types=1);
 
 namespace Framework\Security\Csrf;
 
-use Framework\Http\SessionInterface;
+use framework\Http\Session\SessionInterface;
 
 /**
  * Separate Token-Verwaltung für bessere Kapselung
