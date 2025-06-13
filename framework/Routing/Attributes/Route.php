@@ -7,12 +7,11 @@ namespace Framework\Routing\Attributes;
 use Attribute;
 
 /**
- * High-performance Route attribute with PHP 8.4 optimizations
+ * Optimized Route attribute for PHP 8.4
  */
 #[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
-final  class Route
+final class Route
 {
-    // PHP 8.4 Property Hooks for computed properties
     public string $normalizedMethod {
         get => strtoupper($this->method);
     }
@@ -21,12 +20,8 @@ final  class Route
         get => str_contains($this->path, '{');
     }
 
-    public bool $isSecure {
-        get => $this->validateSecuritySettings();
-    }
-
-    public string $signature {
-        get => $this->generateSignature();
+    public array $allMethods {
+        get => array_unique(array_merge([$this->normalizedMethod], array_map('strtoupper', $this->methods)));
     }
 
     /**
@@ -53,7 +48,7 @@ final  class Route
     }
 
     /**
-     * Comprehensive validation and normalization
+     * Validate and normalize all input
      */
     private function validateAndNormalize(): void
     {
@@ -68,13 +63,12 @@ final  class Route
     }
 
     /**
-     * Enhanced HTTP method validation
+     * Validate HTTP method
      */
     private function validateMethod(string $method): void
     {
         $allowedMethods = [
-            'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS',
-            'TRACE', 'CONNECT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'COPY', 'MOVE'
+            'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'
         ];
 
         $normalizedMethod = strtoupper(trim($method));
@@ -87,12 +81,11 @@ final  class Route
             throw new \InvalidArgumentException("Invalid HTTP method: {$method}");
         }
 
-        // Override readonly property through reflection for normalization
-        $this->setNormalizedMethod($normalizedMethod);
+        $this->method = $normalizedMethod;
     }
 
     /**
-     * Enhanced path validation with security focus
+     * Validate path with security checks
      */
     private function validatePath(string $path): void
     {
@@ -108,14 +101,12 @@ final  class Route
             throw new \InvalidArgumentException('Path too long (max 2048 characters)');
         }
 
-        // Enhanced security checks
+        // Security checks
         $dangerousPatterns = [
             '/\.\./', // Directory traversal
             '/\0/',   // Null bytes
             '/<script/i', // XSS attempts
             '/javascript:/i', // JavaScript URLs
-            '/data:/i', // Data URLs
-            '/vbscript:/i', // VBScript URLs
         ];
 
         foreach ($dangerousPatterns as $pattern) {
@@ -130,15 +121,10 @@ final  class Route
                 $this->validateParameterName($param);
             }
         }
-
-        // Check for valid URL structure
-        if (!$this->isValidUrlStructure($path)) {
-            throw new \InvalidArgumentException('Invalid URL structure in path');
-        }
     }
 
     /**
-     * Validate parameter names in path
+     * Validate parameter names
      */
     private function validateParameterName(string $param): void
     {
@@ -156,9 +142,8 @@ final  class Route
 
         // Reserved parameter names
         $reserved = [
-            '__construct', '__destruct', '__call', '__get', '__set', '__isset',
-            '__unset', '__sleep', '__wakeup', '__serialize', '__unserialize',
-            'class', 'interface', 'trait', 'enum', 'function', 'var', 'const'
+            '__construct', '__destruct', '__call', '__get', '__set',
+            'class', 'interface', 'trait', 'enum', 'function'
         ];
 
         if (in_array(strtolower($param), $reserved, true)) {
@@ -167,39 +152,12 @@ final  class Route
     }
 
     /**
-     * Validate URL structure
-     */
-    private function isValidUrlStructure(string $path): bool
-    {
-        // Check for valid segment structure
-        $segments = explode('/', trim($path, '/'));
-
-        foreach ($segments as $segment) {
-            if ($segment === '') {
-                continue; // Allow empty segments
-            }
-
-            // Check segment length
-            if (strlen($segment) > 100) {
-                return false;
-            }
-
-            // Check for valid characters (including parameters)
-            if (!preg_match('/^[a-zA-Z0-9\-_.{}]+$/', $segment)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Enhanced middleware validation
+     * Validate middleware array
      */
     private function validateMiddleware(array $middleware): void
     {
-        if (count($middleware) > 20) {
-            throw new \InvalidArgumentException('Too many middleware (max 20)');
+        if (count($middleware) > 10) {
+            throw new \InvalidArgumentException('Too many middleware (max 10)');
         }
 
         foreach ($middleware as $mw) {
@@ -207,12 +165,8 @@ final  class Route
                 throw new \InvalidArgumentException('Middleware must be strings');
             }
 
-            if (strlen($mw) === 0) {
-                throw new \InvalidArgumentException('Middleware name cannot be empty');
-            }
-
-            if (strlen($mw) > 100) {
-                throw new \InvalidArgumentException("Middleware name too long: {$mw}");
+            if (strlen($mw) === 0 || strlen($mw) > 100) {
+                throw new \InvalidArgumentException('Invalid middleware name length');
             }
 
             if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $mw)) {
@@ -222,7 +176,7 @@ final  class Route
     }
 
     /**
-     * Enhanced route name validation
+     * Validate route name
      */
     private function validateName(?string $name): void
     {
@@ -241,17 +195,10 @@ final  class Route
         if (!preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
             throw new \InvalidArgumentException('Route name contains invalid characters');
         }
-
-        // Check for reserved names
-        $reserved = ['index', 'show', 'create', 'store', 'edit', 'update', 'destroy'];
-        if (in_array(strtolower($name), $reserved, true)) {
-            // Warning but not error for reserved names
-            error_log("Warning: Using reserved route name: {$name}");
-        }
     }
 
     /**
-     * Enhanced subdomain validation
+     * Validate subdomain
      */
     private function validateSubdomain(?string $subdomain): void
     {
@@ -267,23 +214,12 @@ final  class Route
             throw new \InvalidArgumentException('Subdomain too long (max 63 characters)');
         }
 
-        // RFC 1123 hostname validation with enhanced security
+        // RFC 1123 hostname validation
         if (!preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain)) {
             throw new \InvalidArgumentException('Invalid subdomain format');
         }
 
-        // Enhanced security checks
-        $dangerous = [
-            'admin', 'root', 'www', 'mail', 'ftp', 'localhost', 'test', 'staging',
-            'api', 'cdn', 'static', 'assets', 'media', 'img', 'images', 'css', 'js',
-            'dev', 'development', 'prod', 'production', 'beta', 'alpha'
-        ];
-
-        if (in_array(strtolower($subdomain), $dangerous, true)) {
-            error_log("Warning: Using potentially dangerous subdomain: {$subdomain}");
-        }
-
-        // Check for XSS and injection attempts
+        // Check for dangerous characters
         if (preg_match('/[<>"\'\0&;]/', $subdomain)) {
             throw new \InvalidArgumentException('Subdomain contains dangerous characters');
         }
@@ -295,9 +231,8 @@ final  class Route
     private function validateOptions(array $options): void
     {
         $allowedOptions = [
-            'cache', 'timeout', 'priority', 'tags', 'description',
-            'deprecated', 'version', 'auth_required', 'rate_limit',
-            'cors', 'csrf', 'ssl_required'
+            'cache', 'timeout', 'priority', 'description',
+            'deprecated', 'version', 'auth_required', 'rate_limit'
         ];
 
         foreach ($options as $key => $value) {
@@ -306,17 +241,17 @@ final  class Route
             }
 
             if (!in_array($key, $allowedOptions, true)) {
+                // Warning statt Exception für unbekannte Optionen
                 error_log("Warning: Unknown route option: {$key}");
             }
 
             // Validate specific option types
             match ($key) {
-                'cache' => $this->validateCacheOption($value),
+                'cache' => $this->validateBooleanOrIntOption($value, $key),
                 'timeout' => $this->validateTimeoutOption($value),
                 'priority' => $this->validatePriorityOption($value),
                 'deprecated' => $this->validateBooleanOption($value, $key),
                 'auth_required' => $this->validateBooleanOption($value, $key),
-                'ssl_required' => $this->validateBooleanOption($value, $key),
                 default => null
             };
         }
@@ -341,22 +276,15 @@ final  class Route
     }
 
     /**
-     * Validate additional methods for multi-method routes
+     * Validate additional methods
      */
     private function validateMethods(array $methods): void
     {
         foreach ($methods as $method) {
+            if (!is_string($method)) {
+                throw new \InvalidArgumentException('Methods must be strings');
+            }
             $this->validateMethod($method);
-        }
-    }
-
-    /**
-     * Validate cache option
-     */
-    private function validateCacheOption(mixed $value): void
-    {
-        if (!is_bool($value) && !is_int($value) && !is_array($value)) {
-            throw new \InvalidArgumentException('Cache option must be boolean, integer, or array');
         }
     }
 
@@ -391,50 +319,13 @@ final  class Route
     }
 
     /**
-     * Check if route has secure configuration
+     * Validate boolean or int option
      */
-    private function validateSecuritySettings(): bool
+    private function validateBooleanOrIntOption(mixed $value, string $optionName): void
     {
-        // Check for HTTPS requirement
-        if (isset($this->options['ssl_required']) && $this->options['ssl_required'] === true) {
-            return true;
+        if (!is_bool($value) && !is_int($value)) {
+            throw new \InvalidArgumentException("{$optionName} option must be boolean or integer");
         }
-
-        // Check schemes
-        if (in_array('https', $this->schemes, true) && !in_array('http', $this->schemes, true)) {
-            return true;
-        }
-
-        // Check for auth requirement
-        if (isset($this->options['auth_required']) && $this->options['auth_required'] === true) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Generate unique signature for route
-     */
-    private function generateSignature(): string
-    {
-        $data = [
-            $this->normalizedMethod,
-            $this->path,
-            $this->subdomain,
-            implode(',', $this->middleware),
-            implode(',', $this->schemes)
-        ];
-
-        return hash('xxh3', implode('|', $data));
-    }
-
-    /**
-     * Get all HTTP methods for this route
-     */
-    public function getAllMethods(): array
-    {
-        return array_unique(array_merge([$this->normalizedMethod], array_map('strtoupper', $this->methods)));
     }
 
     /**
@@ -442,7 +333,7 @@ final  class Route
      */
     public function supportsMethod(string $method): bool
     {
-        return in_array(strtoupper($method), $this->getAllMethods(), true);
+        return in_array(strtoupper($method), $this->allMethods, true);
     }
 
     /**
@@ -496,13 +387,38 @@ final  class Route
     }
 
     /**
-     * Internal method to set normalized method (workaround for readonly)
+     * Create from array
      */
-    private function setNormalizedMethod(string $method): void
+    public static function fromArray(array $data): self
     {
-        // In a real implementation, this would use reflection
-        // or the property would not be readonly
-        $reflection = new \ReflectionProperty($this, 'method');
-        $reflection->setValue($this, $method);
+        return new self(
+            $data['method'],
+            $data['path'],
+            $data['middleware'] ?? [],
+            $data['name'] ?? null,
+            $data['subdomain'] ?? null,
+            $data['options'] ?? [],
+            $data['schemes'] ?? ['http', 'https'],
+            $data['methods'] ?? []
+        );
+    }
+
+    /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'method' => $this->normalizedMethod,
+            'path' => $this->path,
+            'has_parameters' => $this->hasParameters,
+            'all_methods' => $this->allMethods,
+            'middleware_count' => count($this->middleware),
+            'name' => $this->name,
+            'subdomain' => $this->subdomain,
+            'requires_https' => $this->requiresHttps(),
+            'priority' => $this->getPriority(),
+            'is_deprecated' => $this->isDeprecated(),
+        ];
     }
 }
