@@ -5,51 +5,27 @@ declare(strict_types=1);
 namespace Framework\Http;
 
 /**
- * Secure Session Management with PHP 8.4 enhancements and optimized lazy loading
+ * Optimized Session Management with clean separation of concerns
  */
 class Session implements SessionInterface
 {
     // Security constants
     private const int MAX_LIFETIME = 7200; // 2 hours
     private const int REGENERATE_INTERVAL = 300; // 5 minutes
-    private const int VALIDATION_INTERVAL = 60; // 1 minute
     private const int MAX_DATA_SIZE = 1048576; // 1MB
     private const string SESSION_PREFIX = '_framework_';
 
     // Lazy-loaded session data
     private ?array $sessionData = null;
-    private ?array $flashData = null;
-    private ?array $userData = null;
-
-    // Optimized sync system
-    private array $pendingWrites = [];
     private ?int $lastValidation = null;
 
     // Property Hooks for better API
     public private(set) bool $started = false;
     public private(set) ?string $sessionId = null;
 
-    // Lazy-loaded properties with Property Hooks
-    public string|int|null $userId {
-        get {
-            $this->ensureStarted();
-            return $this->getUserDataLazy()['_user_id'] ?? null;
-        }
-    }
-
-    public bool $isLoggedIn {
-        get {
-            $this->ensureStarted();
-            return isset($this->getUserDataLazy()['_user_id']);
-        }
-    }
-
-    public array $userInfo {
-        get {
-            $this->ensureStarted();
-            return $this->getUserDataLazy()['_user_data'] ?? [];
-        }
-    }
+    // Lazy-loaded components
+    private ?FlashManager $flashManager = null;
+    private ?AuthManager $authManager = null;
 
     public function __construct(
         private readonly array $config = []
@@ -79,7 +55,7 @@ class Session implements SessionInterface
         $this->sessionId = session_id();
 
         // Security validation
-        $this->validateIfNeeded();
+        $this->validateSession();
         $this->regenerateIfNeeded();
     }
 
@@ -94,7 +70,7 @@ class Session implements SessionInterface
     }
 
     /**
-     * Set session value with validation and optimized sync
+     * Set session value with validation
      */
     public function set(string $key, mixed $value): void
     {
@@ -106,16 +82,14 @@ class Session implements SessionInterface
             throw new \InvalidArgumentException("Session data too large for key: {$key}");
         }
 
-        // Update lazy cache
+        // Update cache and session
         $this->sessionData ??= $this->loadSessionData();
         $this->sessionData[$key] = $value;
-
-        // Mark for sync
-        $this->markForSync('session', $key, $value);
+        $_SESSION[$key] = $value;
     }
 
     /**
-     * Check if session has key (lazy)
+     * Check if session has key
      */
     public function has(string $key): bool
     {
@@ -125,25 +99,14 @@ class Session implements SessionInterface
     }
 
     /**
-     * Remove session key with optimized sync
+     * Remove session key
      */
     public function remove(string $key): void
     {
         $this->ensureStarted();
 
         $this->sessionData ??= $this->loadSessionData();
-        unset($this->sessionData[$key]);
-
-        $this->markForSync('session', $key, null);
-    }
-
-    /**
-     * Get all session data (lazy)
-     */
-    public function all(): array
-    {
-        $this->ensureStarted();
-        return $this->getSessionDataLazy();
+        unset($this->sessionData[$key], $_SESSION[$key]);
     }
 
     /**
@@ -153,9 +116,14 @@ class Session implements SessionInterface
     {
         $this->ensureStarted();
 
+        // Clear all non-framework keys
+        foreach ($_SESSION as $key => $value) {
+            if (!str_starts_with($key, self::SESSION_PREFIX)) {
+                unset($_SESSION[$key]);
+            }
+        }
+
         $this->sessionData = [];
-        $this->pendingWrites['session'] = ['_clear' => true];
-        $this->syncPending();
     }
 
     /**
@@ -170,7 +138,7 @@ class Session implements SessionInterface
         }
 
         $this->sessionId = session_id();
-        $this->setUserDataItem('_regenerated_at', time());
+        $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] = time();
     }
 
     /**
@@ -184,9 +152,8 @@ class Session implements SessionInterface
 
         // Clear all caches
         $this->sessionData = [];
-        $this->flashData = [];
-        $this->userData = [];
-        $this->pendingWrites = [];
+        $this->flashManager = null;
+        $this->authManager = null;
 
         // Clear PHP session
         $_SESSION = [];
@@ -211,195 +178,27 @@ class Session implements SessionInterface
     }
 
     /**
-     * Flash message storage with optimized handling
+     * Get flash manager for flash messages
      */
-    public function flash(string $key, mixed $value = null): mixed
+    public function flash(): FlashInterface
     {
         $this->ensureStarted();
-
-        if ($value === null) {
-            // Get and remove flash message
-            $flash = $this->getFlashDataLazy();
-            $flashValue = $flash[$key] ?? null;
-
-            if (isset($this->flashData[$key])) {
-                unset($this->flashData[$key]);
-                $this->markForSync('flash', $key, null);
-            }
-
-            return $flashValue;
-        }
-
-        // Set flash message
-        $this->flashData ??= $this->loadFlashData();
-        $this->flashData[$key] = $value;
-        $this->markForSync('flash', $key, $value);
-
-        return true;
+        return $this->flashManager ??= new FlashManager();
     }
 
     /**
-     * Store user authentication
+     * Get auth manager for authentication
      */
-    public function login(string|int $userId, array $userData = []): void
+    public function auth(): AuthInterface
     {
         $this->ensureStarted();
-
-        // Regenerate session on login to prevent fixation
-        $this->regenerate();
-
-        $this->userData ??= $this->loadUserData();
-        $this->userData['_user_id'] = $userId;
-        $this->userData['_user_data'] = $userData;
-        $this->userData['_login_time'] = time();
-        $this->userData['_last_activity'] = time();
-
-        $this->markForSync('user', '_batch', $this->userData);
+        return $this->authManager ??= new AuthManager($this);
     }
 
-    /**
-     * Remove user authentication
-     */
-    public function logout(): void
-    {
-        $this->ensureStarted();
-
-        $this->userData = [];
-        $this->pendingWrites['user'] = ['_clear' => true];
-        $this->syncPending();
-
-        // Regenerate session after logout
-        $this->regenerate();
-    }
+    // === Private Helper Methods ===
 
     /**
-     * Update last activity timestamp
-     */
-    public function touch(): void
-    {
-        $this->ensureStarted();
-        $this->setUserDataItem('_last_activity', time());
-    }
-
-    // === Optimized Lazy Loading & Sync System ===
-
-    /**
-     * Mark data for sync (batched writes)
-     */
-    private function markForSync(string $type, string $key, mixed $value): void
-    {
-        $this->pendingWrites[$type][$key] = $value;
-
-        // Auto-sync on significant changes
-        if (count($this->pendingWrites) > 10) {
-            $this->syncPending();
-        }
-    }
-
-    /**
-     * Sync all pending writes at once
-     */
-    private function syncPending(): void
-    {
-        foreach ($this->pendingWrites as $type => $data) {
-            match($type) {
-                'session' => $this->syncSessionData($data),
-                'flash' => $this->syncFlashData($data),
-                'user' => $this->syncUserData($data)
-            };
-        }
-        $this->pendingWrites = [];
-    }
-
-    /**
-     * Sync session data to $_SESSION
-     */
-    private function syncSessionData(array $changes): void
-    {
-        if (isset($changes['_clear'])) {
-            // Clear all non-framework keys
-            foreach ($_SESSION as $key => $value) {
-                if (!str_starts_with($key, self::SESSION_PREFIX)) {
-                    unset($_SESSION[$key]);
-                }
-            }
-            return;
-        }
-
-        foreach ($changes as $key => $value) {
-            if ($value === null) {
-                unset($_SESSION[$key]);
-            } else {
-                $_SESSION[$key] = $value;
-            }
-        }
-    }
-
-    /**
-     * Sync flash data to $_SESSION
-     */
-    private function syncFlashData(array $changes): void
-    {
-        $flashKey = self::SESSION_PREFIX . 'flash';
-
-        if (isset($changes['_clear'])) {
-            unset($_SESSION[$flashKey]);
-            return;
-        }
-
-        $current = $_SESSION[$flashKey] ?? [];
-
-        foreach ($changes as $key => $value) {
-            if ($value === null) {
-                unset($current[$key]);
-            } else {
-                $current[$key] = $value;
-            }
-        }
-
-        if (empty($current)) {
-            unset($_SESSION[$flashKey]);
-        } else {
-            $_SESSION[$flashKey] = $current;
-        }
-    }
-
-    /**
-     * Sync user data to $_SESSION
-     */
-    private function syncUserData(array $changes): void
-    {
-        $userKey = self::SESSION_PREFIX . 'user';
-
-        if (isset($changes['_clear'])) {
-            unset($_SESSION[$userKey]);
-            return;
-        }
-
-        if (isset($changes['_batch'])) {
-            $_SESSION[$userKey] = $changes['_batch'];
-            return;
-        }
-
-        $current = $_SESSION[$userKey] ?? [];
-
-        foreach ($changes as $key => $value) {
-            if ($value === null) {
-                unset($current[$key]);
-            } else {
-                $current[$key] = $value;
-            }
-        }
-
-        if (empty($current)) {
-            unset($_SESSION[$userKey]);
-        } else {
-            $_SESSION[$userKey] = $current;
-        }
-    }
-
-    /**
-     * Load session data from $_SESSION (lazy)
+     * Load session data from $_SESSION
      */
     private function loadSessionData(): array
     {
@@ -421,48 +220,6 @@ class Session implements SessionInterface
     }
 
     /**
-     * Load flash data (lazy)
-     */
-    private function loadFlashData(): array
-    {
-        return $_SESSION[self::SESSION_PREFIX . 'flash'] ?? [];
-    }
-
-    /**
-     * Get flash data with lazy loading
-     */
-    private function getFlashDataLazy(): array
-    {
-        return $this->flashData ??= $this->loadFlashData();
-    }
-
-    /**
-     * Load user data (lazy)
-     */
-    private function loadUserData(): array
-    {
-        return $_SESSION[self::SESSION_PREFIX . 'user'] ?? [];
-    }
-
-    /**
-     * Get user data with lazy loading
-     */
-    private function getUserDataLazy(): array
-    {
-        return $this->userData ??= $this->loadUserData();
-    }
-
-    /**
-     * Set user data item with optimized sync
-     */
-    private function setUserDataItem(string $key, mixed $value): void
-    {
-        $this->userData ??= $this->loadUserData();
-        $this->userData[$key] = $value;
-        $this->markForSync('user', $key, $value);
-    }
-
-    /**
      * Ensure session is started
      */
     private function ensureStarted(): void
@@ -473,41 +230,28 @@ class Session implements SessionInterface
     }
 
     /**
-     * Optimized validation - only when needed
-     */
-    private function validateIfNeeded(): void
-    {
-        $now = time();
-        if ($this->lastValidation === null || $now - $this->lastValidation > self::VALIDATION_INTERVAL) {
-            $this->validateSession();
-            $this->lastValidation = $now;
-        }
-    }
-
-    /**
      * Validate session security
      */
     private function validateSession(): void
     {
         $now = time();
-        $userData = $this->getUserDataLazy();
 
         // Check session timeout
-        $lastActivity = $userData['_last_activity'] ?? $now;
+        $lastActivity = $_SESSION[self::SESSION_PREFIX . 'last_activity'] ?? $now;
         if ($now - $lastActivity > self::MAX_LIFETIME) {
             $this->destroy();
             throw new \RuntimeException('Session expired');
         }
 
         // Update last activity
-        $this->setUserDataItem('_last_activity', $now);
+        $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
 
         // Validate user agent (basic fingerprinting)
         $currentUserAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-        $sessionUserAgent = $userData['_user_agent'] ?? '';
+        $sessionUserAgent = $_SESSION[self::SESSION_PREFIX . 'user_agent'] ?? '';
 
         if ($sessionUserAgent === '') {
-            $this->setUserDataItem('_user_agent', $currentUserAgent);
+            $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent;
         } elseif ($sessionUserAgent !== $currentUserAgent) {
             $this->destroy();
             throw new \RuntimeException('Session hijacking detected');
@@ -516,10 +260,10 @@ class Session implements SessionInterface
         // Validate IP address (optional)
         if ($this->config['validate_ip'] ?? false) {
             $currentIp = $_SERVER['REMOTE_ADDR'] ?? '';
-            $sessionIp = $userData['_ip_address'] ?? '';
+            $sessionIp = $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? '';
 
             if ($sessionIp === '') {
-                $this->setUserDataItem('_ip_address', $currentIp);
+                $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
             } elseif ($sessionIp !== $currentIp) {
                 $this->destroy();
                 throw new \RuntimeException('IP address mismatch');
@@ -532,8 +276,7 @@ class Session implements SessionInterface
      */
     private function regenerateIfNeeded(): void
     {
-        $userData = $this->getUserDataLazy();
-        $lastRegeneration = $userData['_regenerated_at'] ?? 0;
+        $lastRegeneration = $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] ?? 0;
 
         if (time() - $lastRegeneration > self::REGENERATE_INTERVAL) {
             $this->regenerate();
@@ -573,15 +316,5 @@ class Session implements SessionInterface
         return !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ||
             !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https' ||
             !empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on';
-    }
-
-    /**
-     * Destructor: Ensure pending writes are synced
-     */
-    public function __destruct()
-    {
-        if (!empty($this->pendingWrites)) {
-            $this->syncPending();
-        }
     }
 }
