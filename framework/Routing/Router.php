@@ -43,7 +43,7 @@ final class Router
 
     // Performance optimizations
     private array $routeCache = [];
-    private array $methodCache = [];
+
     private ?int $cachedRouteCount = null;
     private int $maxCacheSize = 500;
 
@@ -104,15 +104,13 @@ final class Router
         ?string $name = null,
         ?string $subdomain = null
     ): void {
-        // Validate input
-        RouteValidator::validateMethod($method);
-        RouteValidator::validatePath($path);
-        RouteValidator::validateActionClass($actionClass);
+
+
         $this->validateMiddleware($middleware);
         $this->validateRouteName($name);
         $this->validateSubdomain($subdomain);
 
-        // Create route info
+        // Create route info (Validierung erfolgt hier automatisch)
         $routeInfo = RouteInfo::fromPath(
             strtoupper($method),
             $path,
@@ -414,7 +412,6 @@ final class Router
     public function clearCaches(): void
     {
         $this->routeCache = [];
-        $this->methodCache = [];
         $this->cache?->clear();
     }
 
