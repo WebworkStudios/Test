@@ -5,16 +5,23 @@ declare(strict_types=1);
 namespace Framework\Http;
 
 /**
- * HTTP Request with Lazy Loading for better performance
+ * HTTP Request with Lazy Loading and optimized structure
  */
 final class Request
 {
     // Lazy-loaded data (computed only when needed)
     private ?array $parsedBody = null;
-    private ?array $parsedHeaders = null;
+    private ?Headers $headersObject = null;
+    private ?CacheHeaders $cacheHeaders = null;
     private ?array $parsedFiles = null;
     private ?string $clientIp = null;
     private ?string $fullUrl = null;
+
+    // Input size limits
+    private const int MAX_STRING_LENGTH = 1000000;    // 1MB for strings
+    private const int MAX_BODY_SIZE = 10485760;       // 10MB for request body
+    private const int MAX_JSON_SIZE = 1048576;        // 1MB for JSON
+    private const int MAX_ARRAY_ITEMS = 1000;         // Max array elements
 
     /**
      * @param string $method HTTP method
@@ -49,7 +56,7 @@ final class Request
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
         $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
         $contentLength = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
-        
+
         // Only parse small/fast data eagerly
         return new self(
             method: $method,
@@ -78,7 +85,7 @@ final class Request
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
         $contentType = $headers['content-type'] ?? '';
         $rawBody = is_array($body) ? json_encode($body) : (string) $body;
-        
+
         return new self(
             method: strtoupper($method),
             uri: $uri,
@@ -114,12 +121,12 @@ final class Request
 
     public function expectsJson(): bool
     {
-        return str_contains($this->header('accept') ?? '', 'application/json');
+        return $this->headers()->expectsJson();
     }
 
     public function isAjax(): bool
     {
-        return strtolower($this->header('x-requested-with') ?? '') === 'xmlhttprequest';
+        return $this->headers()->isAjax();
     }
 
     // === Security & Network Info ===
@@ -127,30 +134,24 @@ final class Request
     public function isSecure(): bool
     {
         return ($this->server['HTTPS'] ?? '') === 'on' ||
-               ($this->server['SERVER_PORT'] ?? '') === '443' ||
-               strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
+            ($this->server['SERVER_PORT'] ?? '') === '443' ||
+            strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
     }
 
     public function ip(): string
     {
         // Lazy computation - only calculate once
         if ($this->clientIp === null) {
-            // Check for forwarded IP first
-            $forwardedFor = $this->header('x-forwarded-for');
-            if ($forwardedFor) {
-                $ips = explode(',', $forwardedFor);
-                $this->clientIp = trim($ips[0]);
-            } else {
-                $this->clientIp = $this->server['REMOTE_ADDR'] ?? 'unknown';
-            }
+            $forwardedIps = $this->headers()->forwardedFor();
+            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
         }
-        
+
         return $this->clientIp;
     }
 
     public function userAgent(): string
     {
-        return $this->header('user-agent') ?? '';
+        return $this->headers()->userAgent();
     }
 
     public function host(): string
@@ -169,26 +170,35 @@ final class Request
         if ($this->fullUrl === null) {
             $this->fullUrl = $this->scheme() . '://' . $this->host() . $this->uri;
         }
-        
+
         return $this->fullUrl;
     }
 
-    // === Headers (Lazy Parsed) ===
+    // === Headers (via Headers class) ===
 
     public function header(string $name): ?string
     {
-        $headers = $this->headers();
-        return $headers[strtolower($name)] ?? null;
+        return $this->headers()->get($name);
     }
 
-    public function headers(): array
+    public function headers(): Headers
     {
         // Lazy parsing - only parse headers when first accessed
-        if ($this->parsedHeaders === null) {
-            $this->parsedHeaders = $this->parseHeaders();
+        if ($this->headersObject === null) {
+            $this->headersObject = Headers::fromServer($this->server);
         }
-        
-        return $this->parsedHeaders;
+
+        return $this->headersObject;
+    }
+
+    // === Caching ===
+
+    public function cache(): CacheHeaders
+    {
+        if ($this->cacheHeaders === null) {
+            $this->cacheHeaders = new CacheHeaders($this->headers());
+        }
+        return $this->cacheHeaders;
     }
 
     // === Query Parameters (Eager) ===
@@ -222,7 +232,7 @@ final class Request
         if ($this->parsedBody === null) {
             $this->parsedBody = $this->parseBody();
         }
-        
+
         return $this->parsedBody;
     }
 
@@ -238,32 +248,26 @@ final class Request
         return isset($this->query[$key]) || isset($this->body()[$key]);
     }
 
-    // === Input Size Limits ===
-    private const MAX_STRING_LENGTH = 1000000;    // 1MB for strings
-    private const MAX_BODY_SIZE = 10485760;       // 10MB for request body
-    private const MAX_JSON_SIZE = 1048576;        // 1MB for JSON
-    private const MAX_ARRAY_ITEMS = 1000;         // Max array elements
-
     // === Type-Safe Parameter Access ===
 
     /**
      * Get parameter as string with optional default and size limit
      */
-    public function string(string $key, string $default = '', int $maxLength = self::MAX_STRING_LENGTH): string
+    public function string(string $key, string $default = ''): string
     {
         $value = $this->get($key);
-        
-        if ($value === null) {
+
+        if ($value === null || $value === '') {
             return $default;
         }
-        
+
         $stringValue = (string) $value;
-        
+
         // Check size limit
-        if (strlen($stringValue) > $maxLength) {
+        if (strlen($stringValue) > self::MAX_STRING_LENGTH) {
             return $default; // Return default for oversized input
         }
-        
+
         return $stringValue;
     }
 
@@ -273,14 +277,12 @@ final class Request
     public function int(string $key, int $default = 0): int
     {
         $value = $this->get($key);
-        
-        if ($value === null || $value === '') {
-            return $default;
-        }
-        
-        // Handle string representations
-        $filtered = filter_var($value, FILTER_VALIDATE_INT);
-        return $filtered !== false ? $filtered : $default;
+
+        return match(true) {
+            $value === null || $value === '' => $default,
+            is_int($value) => $value,
+            default => filter_var($value, FILTER_VALIDATE_INT) ?: $default
+        };
     }
 
     /**
@@ -289,16 +291,16 @@ final class Request
     public function float(string $key, float $default = 0.0): float
     {
         $value = $this->get($key);
-        
+
         if ($value === null || $value === '') {
             return $default;
         }
-        
+
         // Handle German/European decimal separator
         if (is_string($value)) {
             $value = str_replace(',', '.', $value);
         }
-        
+
         $filtered = filter_var($value, FILTER_VALIDATE_FLOAT);
         return $filtered !== false ? $filtered : $default;
     }
@@ -310,72 +312,34 @@ final class Request
     public function bool(string $key, bool $default = false): bool
     {
         $value = $this->get($key);
-        
-        if ($value === null) {
-            return $default;
-        }
-        
-        // Handle common truthy values
-        if (is_string($value)) {
-            $lower = strtolower(trim($value));
-            return match ($lower) {
+
+        return match(true) {
+            $value === null => $default,
+            is_bool($value) => $value,
+            is_string($value) => match(strtolower(trim($value))) {
                 'true', '1', 'on', 'yes', 'y' => true,
                 'false', '0', 'off', 'no', 'n', '' => false,
-                default => (bool) $value
-            };
-        }
-        
-        return (bool) $value;
+                default => $default
+            },
+            default => (bool) $value
+        };
     }
 
     /**
      * Get parameter as array with optional default and size limits
      */
-    public function array(string $key, array $default = [], int $maxItems = self::MAX_ARRAY_ITEMS): array
+    public function array(string $key, array $default = []): array
     {
         $value = $this->get($key);
-        
-        if ($value === null) {
-            return $default;
-        }
-        
-        if (is_array($value)) {
-            // Check size limit
-            if (count($value) > $maxItems) {
-                return $default;
-            }
-            return $value;
-        }
-        
-        // Try to decode JSON string
-        if (is_string($value)) {
-            // Check JSON size limit
-            if (strlen($value) > self::MAX_JSON_SIZE) {
-                return $default;
-            }
-            
-            $decoded = json_decode($value, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                // Check decoded array size
-                if (count($decoded) > $maxItems) {
-                    return $default;
-                }
-                return $decoded;
-            }
-            
-            // Handle comma-separated values
-            if (str_contains($value, ',')) {
-                $items = array_map('trim', explode(',', $value));
-                // Check size limit
-                if (count($items) > $maxItems) {
-                    return $default;
-                }
-                return $items;
-            }
-        }
-        
-        // Wrap single value in array
-        return [$value];
+
+        return match(true) {
+            $value === null => $default,
+            is_array($value) => count($value) > self::MAX_ARRAY_ITEMS ? $default : $value,
+            is_string($value) && str_contains($value, ',') =>
+            array_map('trim', explode(',', $value)),
+            is_string($value) && $this->isJson($value) => $this->parseJsonString($value, $default),
+            default => [$value]
+        };
     }
 
     /**
@@ -384,11 +348,11 @@ final class Request
     public function date(string $key, ?\DateTimeImmutable $default = null): ?\DateTimeImmutable
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         try {
             return new \DateTimeImmutable($value);
         } catch (\DateMalformedStringException) {
@@ -402,11 +366,11 @@ final class Request
     public function email(string $key, string $default = ''): string
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         $filtered = filter_var($value, FILTER_VALIDATE_EMAIL);
         return $filtered !== false ? $filtered : $default;
     }
@@ -414,7 +378,7 @@ final class Request
     /**
      * Get parameter as URL (validated) with optional default
      */
-    public function urlParam(string $key, string $default = ''): string  // Umbenennung von url() zu urlParam()
+    public function urlParam(string $key, string $default = ''): string
     {
         $value = $this->string($key);
 
@@ -426,7 +390,21 @@ final class Request
         return $filtered !== false ? $filtered : $default;
     }
 
-    // === Input Sanitization & Security ===
+    /**
+     * Get parameter as JSON (validated and decoded)
+     */
+    public function json(string $key, array $default = []): array
+    {
+        $value = $this->string($key, '', self::MAX_JSON_SIZE);
+
+        if ($value === '') {
+            return $default;
+        }
+
+        return $this->parseJsonString($value, $default);
+    }
+
+    // === Input Sanitization ===
 
     /**
      * Get sanitized parameter (HTML entities, trimmed)
@@ -434,11 +412,11 @@ final class Request
     public function sanitized(string $key, string $default = ''): string
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         return htmlspecialchars(trim($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
@@ -448,11 +426,11 @@ final class Request
     public function stripped(string $key, string $default = ''): string
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         return trim(strip_tags($value));
     }
 
@@ -462,269 +440,15 @@ final class Request
     public function cleaned(string $key, array $allowedTags = [], string $default = ''): string
     {
         $value = $this->string($key);
-        
+
         if ($value === '') {
             return $default;
         }
-        
+
         // Convert array to string format for strip_tags
         $allowedTagsStr = empty($allowedTags) ? '' : '<' . implode('><', $allowedTags) . '>';
-        
+
         return trim(strip_tags($value, $allowedTagsStr));
-    }
-
-    /**
-     * Get parameter with only alphanumeric characters
-     */
-    public function alphaNum(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Keep only letters, numbers, and underscores
-        $filtered = preg_replace('/[^a-zA-Z0-9_]/', '', $value);
-        return $filtered !== '' ? $filtered : $default;
-    }
-
-    /**
-     * Get parameter with only alphabetic characters
-     */
-    public function alpha(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Keep only letters and spaces
-        $filtered = preg_replace('/[^a-zA-Z\s]/', '', $value);
-        return trim($filtered) !== '' ? trim($filtered) : $default;
-    }
-
-    /**
-     * Get parameter with only numeric characters
-     */
-    public function numeric(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Keep only numbers, dots, and minus for decimals
-        $filtered = preg_replace('/[^0-9.\-]/', '', $value);
-        return $filtered !== '' ? $filtered : $default;
-    }
-
-    /**
-     * Get parameter as phone number (cleaned)
-     */
-    public function phone(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Keep only numbers, +, -, (, ), and spaces
-        $filtered = preg_replace('/[^0-9+\-\(\)\s]/', '', $value);
-        return trim($filtered) !== '' ? trim($filtered) : $default;
-    }
-
-    /**
-     * Get parameter as safe file path (prevent directory traversal)
-     */
-    public function safePath(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Remove directory traversal attempts and dangerous characters
-        $safe = str_replace(['../', '.\\', '..\\'], '', $value);
-        $safe = preg_replace('/[^a-zA-Z0-9._\-]/', '', $safe);
-        
-        return $safe !== '' ? $safe : $default;
-    }
-
-    /**
-     * Get parameter as UUID (validated format)
-     */
-    public function uuid(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Validate UUID format (8-4-4-4-12 hexadecimal digits)
-        if (preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i', $value)) {
-            return strtolower($value);
-        }
-        
-        return $default;
-    }
-
-    /**
-     * Get parameter with only whitelisted characters
-     */
-    public function whitelist(string $key, string $allowedChars, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Create regex pattern from allowed characters
-        $pattern = '/[^' . preg_quote($allowedChars, '/') . ']/';
-        $filtered = preg_replace($pattern, '', $value);
-        
-        return $filtered !== '' ? $filtered : $default;
-    }
-
-    /**
-     * Get parameter with blacklisted characters removed
-     */
-    public function blacklist(string $key, array $forbiddenChars, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Remove each forbidden character
-        foreach ($forbiddenChars as $char) {
-            $value = str_replace($char, '', $value);
-        }
-        
-        return trim($value) !== '' ? trim($value) : $default;
-    }
-
-    /**
-     * Get parameter from enum of allowed values
-     */
-    public function enum(string $key, array $allowedValues, mixed $default = null): mixed
-    {
-        $value = $this->get($key);
-        
-        if (in_array($value, $allowedValues, true)) {
-            return $value;
-        }
-        
-        return $default;
-    }
-
-    /**
-     * Get parameter as JSON (validated and decoded)
-     */
-    public function json(string $key, array $default = []): array
-    {
-        $value = $this->string($key, '', self::MAX_JSON_SIZE);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        $decoded = json_decode($value, true);
-        
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            // Check decoded array size
-            if (count($decoded) > self::MAX_ARRAY_ITEMS) {
-                return $default;
-            }
-            return $decoded;
-        }
-        
-        return $default;
-    }
-
-    /**
-     * Get parameter as slug (URL-friendly string)
-     */
-    public function slug(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return $default;
-        }
-        
-        // Convert to lowercase and replace non-alphanumeric characters
-        $slug = strtolower(trim($value));
-        
-        // Replace umlauts and special characters
-        $slug = str_replace(
-            ['ä', 'ö', 'ü', 'ß', 'á', 'à', 'é', 'è', 'í', 'ì', 'ó', 'ò', 'ú', 'ù'],
-            ['ae', 'oe', 'ue', 'ss', 'a', 'a', 'e', 'e', 'i', 'i', 'o', 'o', 'u', 'u'],
-            $slug
-        );
-        
-        // Replace non-alphanumeric characters with hyphens
-        $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
-        
-        // Remove multiple consecutive hyphens
-        $slug = preg_replace('/-+/', '-', $slug);
-        
-        // Remove leading/trailing hyphens
-        $slug = trim($slug, '-');
-        
-        return $slug !== '' ? $slug : $default;
-    }
-
-    /**
-     * Sanitize multiple parameters at once
-     */
-    public function sanitizeAll(array $keys): array
-    {
-        $sanitized = [];
-        
-        foreach ($keys as $key) {
-            $sanitized[$key] = $this->sanitized($key);
-        }
-        
-        return $sanitized;
-    }
-
-    /**
-     * Check if parameter value is safe (no suspicious patterns)
-     */
-    public function isSafe(string $key): bool
-    {
-        $value = $this->string($key);
-        
-        if ($value === '') {
-            return true;
-        }
-        
-        // Check for common malicious patterns
-        $dangerousPatterns = [
-            '/<script[^>]*>.*?<\/script>/i',  // Script tags
-            '/javascript:/i',                 // JavaScript URLs
-            '/on\w+\s*=/i',                  // Event handlers
-            '/\.\./i',                       // Directory traversal
-            '/union\s+select/i',             // SQL injection
-            '/drop\s+table/i',               // SQL injection
-            '/<iframe[^>]*>/i',              // Iframe injection
-        ];
-        
-        foreach ($dangerousPatterns as $pattern) {
-            if (preg_match($pattern, $value)) {
-                return false;
-            }
-        }
-        
-        return true;
     }
 
     // === File Uploads (Lazy Parsed) ===
@@ -747,7 +471,7 @@ final class Request
         if ($this->parsedFiles === null) {
             $this->parsedFiles = $_FILES;
         }
-        
+
         return $this->parsedFiles;
     }
 
@@ -765,7 +489,7 @@ final class Request
         return $this->rawBody;
     }
 
-    // === Private Parsing Methods (Called Lazily) ===
+    // === Private Helper Methods ===
 
     /**
      * Parse request body based on content type and method
@@ -789,15 +513,7 @@ final class Request
 
         // JSON content
         if ($this->isJson()) {
-            $decoded = json_decode($this->rawBody, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                // Check decoded array size
-                if (count($decoded) > self::MAX_ARRAY_ITEMS) {
-                    return [];
-                }
-                return $decoded;
-            }
-            return [];
+            return $this->parseJsonString($this->rawBody, []);
         }
 
         // Form data - try to parse raw body
@@ -822,34 +538,37 @@ final class Request
     }
 
     /**
-     * Parse HTTP headers from $_SERVER
+     * Parse JSON string safely
      */
-    private function parseHeaders(): array
+    private function parseJsonString(string $jsonString, array $default): array
     {
-        $headers = [];
-        
-        foreach ($this->server as $key => $value) {
-            if (str_starts_with($key, 'HTTP_')) {
-                $headerName = strtolower(str_replace('_', '-', substr($key, 5)));
-                $headers[$headerName] = $value;
+        // Check JSON size limit
+        if (strlen($jsonString) > self::MAX_JSON_SIZE) {
+            return $default;
+        }
+
+        try {
+            $decoded = json_decode($jsonString, true, flags: JSON_THROW_ON_ERROR);
+
+            if (is_array($decoded)) {
+                // Check decoded array size
+                if (count($decoded) > self::MAX_ARRAY_ITEMS) {
+                    return $default;
+                }
+                return $decoded;
             }
-        }
 
-        // Add important non-HTTP_ headers
-        if (isset($this->server['CONTENT_TYPE'])) {
-            $headers['content-type'] = $this->server['CONTENT_TYPE'];
+            return $default;
+        } catch (\JsonException) {
+            return $default;
         }
-        
-        if (isset($this->server['CONTENT_LENGTH'])) {
-            $headers['content-length'] = $this->server['CONTENT_LENGTH'];
-        }
+    }
 
-        if (isset($this->server['PHP_AUTH_USER'])) {
-            $user = $this->server['PHP_AUTH_USER'];
-            $pass = $this->server['PHP_AUTH_PW'] ?? '';
-            $headers['authorization'] = 'Basic ' . base64_encode($user . ':' . $pass);
-        }
-
-        return $headers;
+    /**
+     * Check if string contains valid JSON
+     */
+    private function isJsonString(string $string): bool
+    {
+        return str_starts_with(trim($string), '{') || str_starts_with(trim($string), '[');
     }
 }

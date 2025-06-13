@@ -31,15 +31,17 @@ final class Response
     public const int STATUS_BAD_GATEWAY = 502;
     public const int STATUS_SERVICE_UNAVAILABLE = 503;
 
+    private array $cookies = [];
+
     /**
      * @param string $body Response body
      * @param int $status HTTP status code
-     * @param array<string, string> $headers HTTP headers
+     * @param Headers $headers HTTP headers
      */
     public function __construct(
         private string $body = '',
         private int $status = self::STATUS_OK,
-        private array $headers = []
+        private Headers $headers = new Headers()
     ) {
         $this->validateStatus($status);
     }
@@ -61,7 +63,7 @@ final class Response
         return new self(
             $jsonData,
             $status,
-            ['Content-Type' => 'application/json; charset=utf-8']
+            Headers::fromArray(['Content-Type' => 'application/json; charset=utf-8'])
         );
     }
 
@@ -73,7 +75,7 @@ final class Response
         return new self(
             $html,
             $status,
-            ['Content-Type' => 'text/html; charset=utf-8']
+            Headers::fromArray(['Content-Type' => 'text/html; charset=utf-8'])
         );
     }
 
@@ -85,7 +87,7 @@ final class Response
         return new self(
             $text,
             $status,
-            ['Content-Type' => 'text/plain; charset=utf-8']
+            Headers::fromArray(['Content-Type' => 'text/plain; charset=utf-8'])
         );
     }
 
@@ -124,7 +126,7 @@ final class Response
         return new self(
             '',
             $status,
-            ['Location' => $url]
+            Headers::fromArray(['Location' => $url])
         );
     }
 
@@ -134,6 +136,14 @@ final class Response
     public static function noContent(): self
     {
         return new self('', self::STATUS_NO_CONTENT);
+    }
+
+    /**
+     * Create not modified response (for caching)
+     */
+    public static function notModified(): self
+    {
+        return new self('', self::STATUS_NOT_MODIFIED);
     }
 
     /**
@@ -181,23 +191,52 @@ final class Response
     }
 
     /**
-     * Set response header with fluent interface and sanitization
+     * Create cached response with ETag and Last-Modified headers
      */
-    public function withHeader(string $name, string $value): self
-    {
-        $this->headers[$name] = $this->sanitizeHeaderValue($value);
-        return $this;
+    public static function cached(
+        string $content,
+        string $etag,
+        \DateTimeImmutable $lastModified,
+        int $maxAge = 3600,
+        bool $public = true,
+        string $contentType = 'text/html; charset=utf-8'
+    ): self {
+        $cacheHeaders = CacheHeaders::forResponse($etag, $lastModified, $maxAge, $public);
+        $cacheHeaders['Content-Type'] = $contentType;
+
+        return new self(
+            $content,
+            self::STATUS_OK,
+            Headers::fromArray($cacheHeaders)
+        );
     }
 
     /**
-     * Set multiple headers at once with sanitization
+     * Set response header with fluent interface
+     */
+    public function withHeader(string $name, string $value): self
+    {
+        $newHeaders = Headers::fromArray(
+            [...$this->headers->all(), strtolower($name) => $value]
+        );
+
+        $response = new self($this->body, $this->status, $newHeaders);
+        $response->cookies = $this->cookies;
+        return $response;
+    }
+
+    /**
+     * Set multiple headers at once
      */
     public function withHeaders(array $headers): self
     {
-        foreach ($headers as $name => $value) {
-            $this->headers[$name] = $this->sanitizeHeaderValue($value);
-        }
-        return $this;
+        $newHeaders = Headers::fromArray(
+            [...$this->headers->all(), ...array_change_key_case($headers, CASE_LOWER)]
+        );
+
+        $response = new self($this->body, $this->status, $newHeaders);
+        $response->cookies = $this->cookies;
+        return $response;
     }
 
     /**
@@ -206,8 +245,10 @@ final class Response
     public function withStatus(int $status): self
     {
         $this->validateStatus($status);
-        $this->status = $status;
-        return $this;
+
+        $response = new self($this->body, $status, $this->headers);
+        $response->cookies = $this->cookies;
+        return $response;
     }
 
     /**
@@ -215,40 +256,111 @@ final class Response
      */
     public function withBody(string $body): self
     {
-        $this->body = $body;
-        return $this;
+        $response = new self($body, $this->status, $this->headers);
+        $response->cookies = $this->cookies;
+        return $response;
     }
 
     /**
-     * Add cookie to response with validation
+     * Add cookie to response
      */
-    public function withCookie(
-        string $name,
-        string $value,
-        int $expire = 0,
-        string $path = '/',
-        string $domain = '',
-        bool $secure = false,
-        bool $httponly = true,
-        string $samesite = 'Lax'
-    ): self {
-        // Validate cookie name and value
-        $this->validateCookieName($name);
-        $this->validateCookieValue($value);
-        
-        $cookieHeader = $this->buildCookieHeader($name, $value, $expire, $path, $domain, $secure, $httponly, $samesite);
-        
-        // Handle multiple Set-Cookie headers
-        if (isset($this->headers['Set-Cookie'])) {
-            $existing = is_array($this->headers['Set-Cookie']) 
-                ? $this->headers['Set-Cookie'] 
-                : [$this->headers['Set-Cookie']];
-            $this->headers['Set-Cookie'] = [...$existing, $cookieHeader];
-        } else {
-            $this->headers['Set-Cookie'] = $cookieHeader;
-        }
+    public function withCookie(Cookie $cookie): self
+    {
+        $response = new self($this->body, $this->status, $this->headers);
+        $response->cookies = [...$this->cookies, $cookie];
+        return $response;
+    }
 
-        return $this;
+    /**
+     * Add multiple cookies to response
+     */
+    public function withCookies(array $cookies): self
+    {
+        $response = new self($this->body, $this->status, $this->headers);
+        $response->cookies = [...$this->cookies, ...$cookies];
+        return $response;
+    }
+
+    /**
+     * Delete cookie by creating expired cookie
+     */
+    public function withoutCookie(string $name, string $path = '/', string $domain = ''): self
+    {
+        return $this->withCookie(Cookie::delete($name, $path, $domain));
+    }
+
+    /**
+     * Set Cache-Control header
+     */
+    public function withCacheControl(string $cacheControl): self
+    {
+        return $this->withHeader('Cache-Control', $cacheControl);
+    }
+
+    /**
+     * Set ETag header
+     */
+    public function withETag(string $etag): self
+    {
+        return $this->withHeader('ETag', $etag);
+    }
+
+    /**
+     * Set Last-Modified header
+     */
+    public function withLastModified(\DateTimeInterface $lastModified): self
+    {
+        return $this->withHeader('Last-Modified', $lastModified->format('D, d M Y H:i:s T'));
+    }
+
+    /**
+     * Set Expires header
+     */
+    public function withExpires(\DateTimeInterface $expires): self
+    {
+        return $this->withHeader('Expires', $expires->format('D, d M Y H:i:s T'));
+    }
+
+    /**
+     * Disable caching
+     */
+    public function withoutCache(): self
+    {
+        return $this->withHeaders([
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'Expires' => 'Thu, 01 Jan 1970 00:00:00 GMT'
+        ]);
+    }
+
+    /**
+     * Set CORS headers
+     */
+    public function withCors(
+        string $origin = '*',
+        array $methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        array $headers = ['Content-Type', 'Authorization'],
+        int $maxAge = 86400
+    ): self {
+        return $this->withHeaders([
+            'Access-Control-Allow-Origin' => $origin,
+            'Access-Control-Allow-Methods' => implode(', ', $methods),
+            'Access-Control-Allow-Headers' => implode(', ', $headers),
+            'Access-Control-Max-Age' => (string) $maxAge
+        ]);
+    }
+
+    /**
+     * Set security headers
+     */
+    public function withSecurityHeaders(): self
+    {
+        return $this->withHeaders([
+            'X-Content-Type-Options' => 'nosniff',
+            'X-Frame-Options' => 'DENY',
+            'X-XSS-Protection' => '1; mode=block',
+            'Referrer-Policy' => 'strict-origin-when-cross-origin'
+        ]);
     }
 
     /**
@@ -263,22 +375,20 @@ final class Response
 
         // Set status code
         http_response_code($this->status);
-        
+
         // Send headers
-        foreach ($this->headers as $name => $value) {
-            if (is_array($value)) {
-                // Handle multiple values (like Set-Cookie)
-                foreach ($value as $val) {
-                    header("{$name}: {$val}", false);
-                }
-            } else {
-                header("{$name}: {$value}");
-            }
+        foreach ($this->headers->all() as $name => $value) {
+            header("{$name}: {$value}");
         }
-        
+
+        // Send cookies
+        foreach ($this->cookies as $cookie) {
+            header('Set-Cookie: ' . $cookie->toHeaderValue(), false);
+        }
+
         // Send body
         echo $this->body;
-        
+
         // Ensure output is sent immediately
         if (function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
@@ -308,7 +418,7 @@ final class Response
      */
     public function getHeaders(): array
     {
-        return $this->headers;
+        return $this->headers->all();
     }
 
     /**
@@ -316,7 +426,7 @@ final class Response
      */
     public function getHeader(string $name): ?string
     {
-        return $this->headers[$name] ?? null;
+        return $this->headers->get($name);
     }
 
     /**
@@ -324,7 +434,7 @@ final class Response
      */
     public function hasHeader(string $name): bool
     {
-        return isset($this->headers[$name]);
+        return $this->headers->has($name);
     }
 
     /**
@@ -332,7 +442,15 @@ final class Response
      */
     public function getContentType(): string
     {
-        return $this->getHeader('Content-Type') ?? 'text/html';
+        return $this->headers->contentType();
+    }
+
+    /**
+     * Get cookies
+     */
+    public function getCookies(): array
+    {
+        return $this->cookies;
     }
 
     /**
@@ -376,6 +494,35 @@ final class Response
     }
 
     /**
+     * Check if response is empty (no content)
+     */
+    public function isEmpty(): bool
+    {
+        return in_array($this->status, [204, 304], true);
+    }
+
+    /**
+     * Check if response is informational (1xx)
+     */
+    public function isInformational(): bool
+    {
+        return $this->status >= 100 && $this->status < 200;
+    }
+
+    /**
+     * Convert response to array (useful for testing/debugging)
+     */
+    public function toArray(): array
+    {
+        return [
+            'status' => $this->status,
+            'headers' => $this->headers->all(),
+            'cookies' => array_map(fn($cookie) => $cookie->toHeaderValue(), $this->cookies),
+            'body' => $this->body
+        ];
+    }
+
+    /**
      * Validate HTTP status code using match expression
      */
     private function validateStatus(int $status): void
@@ -384,48 +531,5 @@ final class Response
             $status >= 100 && $status < 600 => null,
             default => throw new InvalidArgumentException("Invalid HTTP status code: {$status}")
         };
-    }
-
-    /**
-     * Build cookie header string
-     */
-    private function buildCookieHeader(
-        string $name,
-        string $value,
-        int $expire,
-        string $path,
-        string $domain,
-        bool $secure,
-        bool $httponly,
-        string $samesite
-    ): string {
-        $cookie = "{$name}=" . urlencode($value);
-        
-        if ($expire > 0) {
-            $cookie .= '; Expires=' . gmdate('D, d M Y H:i:s T', $expire);
-            $cookie .= '; Max-Age=' . ($expire - time());
-        }
-        
-        if ($path !== '') {
-            $cookie .= "; Path={$path}";
-        }
-        
-        if ($domain !== '') {
-            $cookie .= "; Domain={$domain}";
-        }
-        
-        if ($secure) {
-            $cookie .= '; Secure';
-        }
-        
-        if ($httponly) {
-            $cookie .= '; HttpOnly';
-        }
-        
-        if ($samesite !== '') {
-            $cookie .= "; SameSite={$samesite}";
-        }
-        
-        return $cookie;
     }
 }
