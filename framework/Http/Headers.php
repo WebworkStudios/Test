@@ -1,6 +1,5 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Http;
@@ -79,32 +78,13 @@ final readonly class Headers
         return $this->headers;
     }
 
-    public function contentType(): string
-    {
-        return $this->get('content-type') ?? 'text/html';
-    }
-
-    public function accept(): string
-    {
-        return $this->get('accept') ?? '';
-    }
-
-    public function userAgent(): string
-    {
-        return $this->get('user-agent') ?? '';
-    }
-
-    public function authorization(): string
-    {
-        return $this->get('authorization') ?? '';
-    }
-
     /**
      * Check if client expects JSON response
      */
     public function expectsJson(): bool
     {
-        return str_contains($this->accept(), 'application/json');
+        $accept = $this->get('accept') ?? '';
+        return str_contains($accept, 'application/json');
     }
 
     /**

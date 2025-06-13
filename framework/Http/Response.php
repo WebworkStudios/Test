@@ -33,17 +33,33 @@ final class Response
 
     private array $cookies = [];
 
+    // Property Hooks for better API
+    public private(set) string $body {
+        set(string $value) {
+            $this->body = $value;
+        }
+    }
+
+    public private(set) int $status {
+        set(int $value) {
+            $this->validateStatus($value);
+            $this->status = $value;
+        }
+    }
+
     /**
      * @param string $body Response body
      * @param int $status HTTP status code
      * @param Headers $headers HTTP headers
      */
     public function __construct(
-        private string $body = '',
-        private int $status = self::STATUS_OK,
+        string $body = '',
+        int $status = self::STATUS_OK,
         private Headers $headers = new Headers()
     ) {
         $this->validateStatus($status);
+        $this->body = $body;
+        $this->status = $status;
     }
 
     /**
@@ -244,8 +260,6 @@ final class Response
      */
     public function withStatus(int $status): self
     {
-        $this->validateStatus($status);
-
         $response = new self($this->body, $status, $this->headers);
         $response->cookies = $this->cookies;
         return $response;
@@ -364,6 +378,14 @@ final class Response
     }
 
     /**
+     * Check if response has specific status(es)
+     */
+    public function hasStatus(int ...$statuses): bool
+    {
+        return in_array($this->status, $statuses, true);
+    }
+
+    /**
      * Send response to client
      */
     public function send(): void
@@ -442,7 +464,7 @@ final class Response
      */
     public function getContentType(): string
     {
-        return $this->headers->contentType();
+        return $this->headers->get('content-type') ?? 'text/html';
     }
 
     /**
@@ -459,54 +481,6 @@ final class Response
     public function isJson(): bool
     {
         return str_contains($this->getContentType(), 'application/json');
-    }
-
-    /**
-     * Check if response is successful (2xx)
-     */
-    public function isSuccessful(): bool
-    {
-        return $this->status >= 200 && $this->status < 300;
-    }
-
-    /**
-     * Check if response is redirect (3xx)
-     */
-    public function isRedirect(): bool
-    {
-        return $this->status >= 300 && $this->status < 400;
-    }
-
-    /**
-     * Check if response is client error (4xx)
-     */
-    public function isClientError(): bool
-    {
-        return $this->status >= 400 && $this->status < 500;
-    }
-
-    /**
-     * Check if response is server error (5xx)
-     */
-    public function isServerError(): bool
-    {
-        return $this->status >= 500 && $this->status < 600;
-    }
-
-    /**
-     * Check if response is empty (no content)
-     */
-    public function isEmpty(): bool
-    {
-        return in_array($this->status, [204, 304], true);
-    }
-
-    /**
-     * Check if response is informational (1xx)
-     */
-    public function isInformational(): bool
-    {
-        return $this->status >= 100 && $this->status < 200;
     }
 
     /**

@@ -106,12 +106,6 @@ final class Request
         return $this->method === strtoupper($method);
     }
 
-    public function isGet(): bool { return $this->isMethod('GET'); }
-    public function isPost(): bool { return $this->isMethod('POST'); }
-    public function isPut(): bool { return $this->isMethod('PUT'); }
-    public function isDelete(): bool { return $this->isMethod('DELETE'); }
-    public function isPatch(): bool { return $this->isMethod('PATCH'); }
-
     // === Content Type Detection ===
 
     public function isJson(): bool
@@ -151,7 +145,7 @@ final class Request
 
     public function userAgent(): string
     {
-        return $this->headers()->userAgent();
+        return $this->header('user-agent') ?? '';
     }
 
     public function host(): string
@@ -337,7 +331,7 @@ final class Request
             is_array($value) => count($value) > self::MAX_ARRAY_ITEMS ? $default : $value,
             is_string($value) && str_contains($value, ',') =>
             array_map('trim', explode(',', $value)),
-            is_string($value) && $this->isJson($value) => $this->parseJsonString($value, $default),
+            is_string($value) && $this->isJsonString($value) => $this->parseJsonString($value, $default),
             default => [$value]
         };
     }

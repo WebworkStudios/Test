@@ -1,6 +1,5 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Http;
@@ -21,9 +20,7 @@ final readonly class Cookie
         public string $samesite = 'Lax'
     )
     {
-        $this->validateName($name);
-        $this->validateValue($value);
-        $this->validateSameSite($samesite);
+        $this->validate();
     }
 
     /**
@@ -93,24 +90,19 @@ final readonly class Cookie
         return $cookie;
     }
 
-    private function validateName(string $name): void
+    /**
+     * Validate cookie properties using match expression
+     */
+    private function validate(): void
     {
-        if ($name === '' || preg_match('/[=,; \t\r\n\013\014]/', $name)) {
-            throw new \InvalidArgumentException("Invalid cookie name: {$name}");
-        }
-    }
-
-    private function validateValue(string $value): void
-    {
-        if (preg_match('/[,; \t\r\n\013\014]/', $value)) {
-            throw new \InvalidArgumentException("Invalid cookie value");
-        }
-    }
-
-    private function validateSameSite(string $samesite): void
-    {
-        if ($samesite !== '' && !in_array($samesite, ['Strict', 'Lax', 'None'], true)) {
-            throw new \InvalidArgumentException("Invalid SameSite value: {$samesite}");
-        }
+        match(true) {
+            $this->name === '' || preg_match('/[=,; \t\r\n\013\014]/', $this->name)
+            => throw new \InvalidArgumentException("Invalid cookie name: {$this->name}"),
+            preg_match('/[,; \t\r\n\013\014]/', $this->value)
+            => throw new \InvalidArgumentException("Invalid cookie value"),
+            $this->samesite !== '' && !in_array($this->samesite, ['Strict', 'Lax', 'None'], true)
+            => throw new \InvalidArgumentException("Invalid SameSite value: {$this->samesite}"),
+            default => null
+        };
     }
 }

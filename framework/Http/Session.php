@@ -17,7 +17,6 @@ class Session implements SessionInterface
 
     // Lazy-loaded session data
     private ?array $sessionData = null;
-    private ?int $lastValidation = null;
 
     // Property Hooks for better API
     public private(set) bool $started = false;
@@ -235,40 +234,57 @@ class Session implements SessionInterface
     private function validateSession(): void
     {
         $now = time();
-
-        // Check session timeout
         $lastActivity = $_SESSION[self::SESSION_PREFIX . 'last_activity'] ?? $now;
+
         if ($now - $lastActivity > self::MAX_LIFETIME) {
-            $this->destroy();
-            throw new \RuntimeException('Session expired');
+            $this->destroyWithException('Session expired');
         }
 
-        // Update last activity
         $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
+        $this->validateFingerprint();
 
-        // Validate user agent (basic fingerprinting)
+        if ($this->config['validate_ip'] ?? false) {
+            $this->validateIpAddress();
+        }
+    }
+
+    /**
+     * Validate user agent fingerprint
+     */
+    private function validateFingerprint(): void
+    {
         $currentUserAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
         $sessionUserAgent = $_SESSION[self::SESSION_PREFIX . 'user_agent'] ?? '';
 
-        if ($sessionUserAgent === '') {
-            $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent;
-        } elseif ($sessionUserAgent !== $currentUserAgent) {
-            $this->destroy();
-            throw new \RuntimeException('Session hijacking detected');
-        }
+        match(true) {
+            $sessionUserAgent === '' => $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent,
+            $sessionUserAgent !== $currentUserAgent => $this->destroyWithException('Session hijacking detected'),
+            default => null
+        };
+    }
 
-        // Validate IP address (optional)
-        if ($this->config['validate_ip'] ?? false) {
-            $currentIp = $_SERVER['REMOTE_ADDR'] ?? '';
-            $sessionIp = $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? '';
+    /**
+     * Validate IP address (optional security feature)
+     */
+    private function validateIpAddress(): void
+    {
+        $currentIp = $_SERVER['REMOTE_ADDR'] ?? '';
+        $sessionIp = $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? '';
 
-            if ($sessionIp === '') {
-                $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
-            } elseif ($sessionIp !== $currentIp) {
-                $this->destroy();
-                throw new \RuntimeException('IP address mismatch');
-            }
-        }
+        match(true) {
+            $sessionIp === '' => $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp,
+            $sessionIp !== $currentIp => $this->destroyWithException('IP address mismatch'),
+            default => null
+        };
+    }
+
+    /**
+     * Destroy session and throw exception
+     */
+    private function destroyWithException(string $message): never
+    {
+        $this->destroy();
+        throw new \RuntimeException($message);
     }
 
     /**
