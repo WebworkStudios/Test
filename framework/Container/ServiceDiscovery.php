@@ -2,537 +2,247 @@
 
 declare(strict_types=1);
 
-namespace Framework\Container;
+namespace Framework\Routing;
 
-use Framework\Container\Attributes\{Service, Factory};
+use Framework\Routing\Attributes\Route;
+use Framework\Container\SecurityValidator;
 use ReflectionClass;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-
+use RecursiveCallbackFilterIterator;
 
 /**
- * Sichere Service Discovery engine für attribute-basierte Auto-Registration
- * 
- * Scannt Verzeichnisse nach Klassen mit Service-Attributen und registriert
- * sie automatisch im Container mit erweiterten Sicherheitsprüfungen.
+ * Optimized route discovery with PHP 8.4 features and simplified architecture
  */
-final readonly class ServiceDiscovery
+final class RouteDiscovery
 {
-    private const MAX_FILE_SIZE = 1024 * 1024; // 1MB Limit
-    private const ALLOWED_EXTENSIONS = ['php'];
-    
-    public function __construct(
-        private Container $container
-    ) {}
-
-    /**
-     * Discover and register services from given directories
-     * 
-     * @param array<string> $directories Directories to scan for services
-     * @param array<string> $extensions File extensions to scan
-     */
-    public function autodiscover(array $directories, array $extensions = self::ALLOWED_EXTENSIONS): void
-    {
-        $secureExtensions = $this->validateExtensions($extensions);
-        
-        foreach ($directories as $directory) {
-            if ($this->container->isAllowedPath($directory)) {
-                $this->scanDirectory($directory, $secureExtensions);
-            }
-        }
+    // PHP 8.4 Property Hooks for computed properties
+    public int $maxDepth {
+        get => $this->config['max_depth'] ?? 10;
     }
 
-    /**
-     * Validiert erlaubte Dateierweiterungen
-     * 
-     * @param array<string> $extensions
-     * @return array<string>
-     */
-    private function validateExtensions(array $extensions): array
-    {
-        return array_filter(
-            $extensions,
-            fn(string $ext) => in_array($ext, self::ALLOWED_EXTENSIONS, true)
+    public bool $strictMode {
+        get => $this->config['strict_mode'] ?? true;
+    }
+
+    public int $processedFiles {
+        get => $this->processedFiles;
+    }
+
+    public int $discoveredRoutes {
+        get => $this->discoveredRoutes;
+    }
+
+    public float $successRate {
+        get => $this->processedFiles > 0
+            ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
+            : 0.0;
+    }
+
+    private array $classCache = [];
+    private int $processedFiles = 0;
+    private int $discoveredRoutes = 0;
+
+    private readonly SecurityValidator $securityValidator;
+
+    public function __construct(
+        private readonly Router $router,
+        private readonly array $ignoredDirectories = [
+            'vendor', 'node_modules', '.git', 'storage', 'cache', 'tests',
+            'build', 'dist', 'coverage', '.idea', '.vscode', 'tmp', 'temp'
+        ],
+        private readonly array $config = []
+    ) {
+        $this->validateConfiguration();
+        $this->securityValidator = new SecurityValidator(
+            strictMode: $this->strictMode,
+            allowedPaths: $this->getAllowedPaths()
         );
     }
 
     /**
-     * Register a specific class if it has service attributes
+     * Create with default configuration
      */
-    public function registerClass(string $className): void
+    public static function create(Router $router, array $config = []): self
     {
-        if (!$this->isClassSafe($className) || !class_exists($className)) {
+        return new self($router, config: $config);
+    }
+
+    /**
+     * Discover routes in specified directories
+     */
+    public function discover(array $directories): void
+    {
+        $this->validateDirectories($directories);
+        $this->resetCounters();
+
+        foreach ($directories as $directory) {
+            $this->scanDirectory($directory);
+        }
+    }
+
+    /**
+     * Scan single directory for routes
+     */
+    private function scanDirectory(string $directory): void
+    {
+        if (str_contains($directory, '*')) {
+            $this->processGlobPattern($directory);
             return;
         }
 
-        try {
-            $reflection = new ReflectionClass($className);
-            
-            // Sicherheitsprüfungen
-            if ($this->isClassSecure($reflection)) {
-                $this->processServiceAttributes($reflection);
-                $this->processFactoryMethods($reflection);
-            }
-        } catch (\ReflectionException) {
-            // Skip classes that can't be reflected
-        }
-    }
-
-    /**
-     * Prüft ob eine Klasse sicher ist
-     */
-    private function isClassSafe(string $className): bool
-    {
-        return !empty($className) &&
-               !str_contains($className, '..') &&
-               !str_starts_with($className, '\\') &&
-               !str_contains($className, '/') &&
-               preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*$/', $className) === 1;
-    }
-
-    /**
-     * Erweiterte Sicherheitsprüfung für Reflection-Klassen
-     */
-    private function isClassSecure(ReflectionClass $reflection): bool
-    {
-        $fileName = $reflection->getFileName();
-        
-        // Prüfe ob Datei in erlaubtem Pfad liegt
-        if ($fileName && !$this->container->isAllowedPath(dirname($fileName))) {
-            return false;
-        }
-
-        // Prüfe auf gefährliche Klassen-Eigenschaften
-        if ($reflection->isInternal()) {
-            return false;
-        }
-
-        // Verbiete bestimmte gefährliche Klassen
-        $dangerousClasses = [
-            'ReflectionFunction',
-            'ReflectionMethod', 
-            'eval',
-            'system',
-            'exec',
-            'shell_exec'
-        ];
-
-        $className = $reflection->getName();
-        foreach ($dangerousClasses as $dangerous) {
-            if (str_contains(strtolower($className), strtolower($dangerous))) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Scan directory for PHP files with service classes
-     */
-    private function scanDirectory(string $directory, array $extensions): void
-    {
         if (!is_dir($directory)) {
+            if ($this->strictMode) {
+                throw new \InvalidArgumentException("Directory does not exist: {$directory}");
+            }
+            return;
+        }
+
+        $realDirectory = realpath($directory);
+        if ($realDirectory === false || !$this->securityValidator->isPathSafe($realDirectory)) {
+            if ($this->strictMode) {
+                throw new \InvalidArgumentException("Invalid or insecure directory: {$directory}");
+            }
             return;
         }
 
         try {
-            $iterator = new RecursiveIteratorIterator(
+            $this->scanWithIterator($realDirectory);
+        } catch (\Exception $e) {
+            if ($this->strictMode) {
+                throw $e;
+            }
+            error_log("Error scanning directory {$directory}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Scan directory using optimized iterator
+     */
+    private function scanWithIterator(string $directory): void
+    {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveCallbackFilterIterator(
                 new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::LEAVES_ONLY
-            );
+                $this->createFileFilter(...)
+            ),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
 
-            foreach ($iterator as $file) {
-                if (!in_array($file->getExtension(), $extensions, true)) {
-                    continue;
-                }
+        $iterator->setMaxDepth($this->maxDepth);
 
-                if ($this->isFileSafe($file->getPathname())) {
-                    $this->processFile($file->getPathname());
-                }
-            }
-        } catch (\UnexpectedValueException) {
-            // Skip directories that can't be read
-        }
-    }
+        $batchSize = 50;
+        $batch = [];
 
-    /**
-     * Sicherheitsprüfung für Dateien
-     */
-    private function isFileSafe(string $filePath): bool
-    {
-        // Realpath-Prüfung gegen Directory Traversal
-        $realPath = realpath($filePath);
-        if ($realPath === false) {
-            return false;
-        }
-
-        // File size check
-        if (filesize($realPath) > self::MAX_FILE_SIZE) {
-            return false;
-        }
-
-        // Path validation
-        return $this->container->isAllowedPath($realPath);
-    }
-
-    /**
-     * Process PHP file for service classes mit Composer-Integration
-     */
-    private function processFile(string $filePath): void
-    {
-        // Versuche zuerst Composer-Autoloader zu nutzen
-        $classes = $this->getClassesFromComposer($filePath);
-        
-        // Fallback auf Parsing wenn Composer nicht verfügbar
-        if (empty($classes)) {
-            $classes = $this->extractClassNamesFromFile($filePath);
-        }
-        
-        foreach ($classes as $className) {
-            $this->registerClass($className);
-        }
-    }
-
-    /**
-     * Sichere Klassenextraktion über Composer-Autoloader APIs
-     *
-     * @return array<string>
-     */
-    private function getClassesFromComposer(string $filePath): array
-    {
-        $classes = [];
-        $realFilePath = realpath($filePath);
-
-        if ($realFilePath === false) {
-            return [];
-        }
-
-        // Methode 1: Über composer/autoload_classmap.php (sicherste Methode)
-        $classes = array_merge($classes, $this->getClassesFromClassmap($realFilePath));
-
-        // Methode 2: Über PSR-4 Namespace-Mapping (falls Classmap leer)
-        if (empty($classes)) {
-            $classes = array_merge($classes, $this->getClassesFromPsr4($realFilePath));
-        }
-
-        // Methode 3: Über öffentliche Composer-API (falls verfügbar)
-        if (empty($classes) && class_exists('Composer\\Autoload\\ClassLoader')) {
-            $classes = array_merge($classes, $this->getClassesFromComposerApi($realFilePath));
-        }
-
-        return array_unique($classes);
-    }
-    
-    /**
-     * Sichere Extraktion über Composer Classmap-Datei
-     * 
-     * @return array<string>
-     */
-    private function getClassesFromClassmap(string $filePath): array
-    {
-        $classes = [];
-        
-        // Suche nach vendor/composer/autoload_classmap.php
-        $currentDir = dirname($filePath);
-        $maxDepth = 10; // Schutz vor unendlichen Schleifen
-        
-        for ($i = 0; $i < $maxDepth; $i++) {
-            $classmapFile = $currentDir . '/vendor/composer/autoload_classmap.php';
-            
-            if (file_exists($classmapFile) && $this->container->isAllowedPath($classmapFile)) {
-                try {
-                    // Sichere Inclusion der Classmap
-                    $classMap = $this->includeClassmapSafely($classmapFile);
-                    
-                    if (is_array($classMap)) {
-                        foreach ($classMap as $class => $file) {
-                            if (realpath($file) === $filePath && $this->isClassSafe($class)) {
-                                $classes[] = $class;
-                            }
-                        }
-                    }
-                    break;
-                } catch (\Throwable) {
-                    // Skip fehlerhafte Classmap-Dateien
-                }
-            }
-            
-            $parentDir = dirname($currentDir);
-            if ($parentDir === $currentDir) {
-                break; // Root erreicht
-            }
-            $currentDir = $parentDir;
-        }
-        
-        return $classes;
-    }
-    
-    /**
-     * Sichere Inclusion der Composer Classmap
-     */
-    private function includeClassmapSafely(string $classmapFile): array
-    {
-        // Validiere Dateiinhalt vor Inclusion
-        $content = file_get_contents($classmapFile);
-        if ($content === false) {
-            return [];
-        }
-        
-        // Prüfe auf gefährliche PHP-Konstrukte
-        $dangerousPatterns = [
-            '/eval\s*\(/i',
-            '/exec\s*\(/i', 
-            '/system\s*\(/i',
-            '/shell_exec\s*\(/i',
-            '/file_get_contents\s*\(\s*["\']php:\/\//i',
-            '/\$_GET\s*\[/i',
-            '/\$_POST\s*\[/i',
-            '/include\s*\(/i',
-            '/require\s*\(/i'
-        ];
-        
-        foreach ($dangerousPatterns as $pattern) {
-            if (preg_match($pattern, $content)) {
-                throw new \RuntimeException("Dangerous content detected in classmap file");
-            }
-        }
-        
-        // Prüfe dass es nur ein Return-Statement mit Array gibt
-        if (!preg_match('/^\s*<\?php\s*return\s*array\s*\(/m', $content)) {
-            throw new \RuntimeException("Invalid classmap file format");
-        }
-        
-        // Isolierte Ausführung mit Output-Buffering
-        ob_start();
-        try {
-            $result = include $classmapFile;
-            ob_end_clean();
-            
-            return is_array($result) ? $result : [];
-        } catch (\Throwable $e) {
-            ob_end_clean();
-            throw $e;
-        }
-    }
-    
-    /**
-     * Sichere Extraktion über PSR-4 Namespace-Mapping
-     * 
-     * @return array<string>
-     */
-    private function getClassesFromPsr4(string $filePath): array
-    {
-        $classes = [];
-        
-        // Suche nach vendor/composer/autoload_psr4.php
-        $currentDir = dirname($filePath);
-        $maxDepth = 10;
-        
-        for ($i = 0; $i < $maxDepth; $i++) {
-            $psr4File = $currentDir . '/vendor/composer/autoload_psr4.php';
-            
-            if (file_exists($psr4File) && $this->container->isAllowedPath($psr4File)) {
-                try {
-                    $psr4Map = $this->includeClassmapSafely($psr4File);
-                    
-                    if (is_array($psr4Map)) {
-                        $classes = array_merge($classes, $this->resolveClassFromPsr4($filePath, $psr4Map));
-                    }
-                    break;
-                } catch (\Throwable) {
-                    // Skip fehlerhafte PSR-4-Dateien
-                }
-            }
-            
-            $parentDir = dirname($currentDir);
-            if ($parentDir === $currentDir) {
+        foreach ($iterator as $file) {
+            if ($this->processedFiles >= 5000) { // Reasonable limit
                 break;
             }
-            $currentDir = $parentDir;
-        }
-        
-        return $classes;
-    }
-    
-    /**
-     * Resolviere Klasse aus PSR-4-Mapping
-     * 
-     * @return array<string>
-     */
-    private function resolveClassFromPsr4(string $filePath, array $psr4Map): array
-    {
-        $classes = [];
-        $realFilePath = realpath($filePath);
-        
-        foreach ($psr4Map as $namespace => $paths) {
-            if (!is_array($paths)) {
-                $paths = [$paths];
-            }
-            
-            foreach ($paths as $path) {
-                $realPath = realpath($path);
-                if ($realPath && str_starts_with($realFilePath, $realPath)) {
-                    // Berechne relativen Pfad
-                    $relativePath = substr($realFilePath, strlen($realPath) + 1);
-                    
-                    // Konvertiere Dateipfad zu Klassenname
-                    $className = $namespace . str_replace(
-                        ['/', '.php'],
-                        ['\\', ''],
-                        $relativePath
-                    );
-                    
-                    if ($this->isClassSafe($className) && class_exists($className)) {
-                        $classes[] = $className;
-                    }
-                }
-            }
-        }
-        
-        return $classes;
-    }
 
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                $batch[] = $file->getPathname();
 
-    /**
-     * Sichere Extraktion über öffentliche Composer-APIs (ohne Reflection)
-     *
-     * @return array<string>
-     */
-    private function getClassesFromComposerApi(string $filePath): array
-    {
-        $classes = [];
-
-        // Verwende nur öffentliche APIs ohne Reflection-Hacks
-        if (function_exists('spl_autoload_functions')) {
-            $autoloaders = spl_autoload_functions();
-
-            foreach ($autoloaders as $autoloader) {
-                if (is_array($autoloader) &&
-                    isset($autoloader[0]) &&
-                    is_object($autoloader[0]) &&
-                    get_class($autoloader[0]) === 'Composer\\Autoload\\ClassLoader') {
-
-                    // Verwende nur dokumentierte öffentliche Methoden
-                    $loader = $autoloader[0];
-
-                    // Prüfe ob die Datei in den konfigurierten Pfaden liegt
-                    if (method_exists($loader, 'getPrefixes')) {
-                        $prefixes = $loader->getPrefixes();
-                        $classes = array_merge($classes, $this->matchFileToClasses($filePath, $prefixes));
-                    }
-
-                    if (method_exists($loader, 'getPrefixesPsr4')) {
-                        $psr4Prefixes = $loader->getPrefixesPsr4();
-                        $classes = array_merge($classes, $this->matchFileToClasses($filePath, $psr4Prefixes));
-                    }
+                if (count($batch) >= $batchSize) {
+                    $this->processBatch($batch);
+                    $batch = [];
                 }
             }
         }
 
-        return array_unique($classes);
-    }
-
-    /**
-     * Matche Datei zu Klassen basierend auf Namespace-Prefixes
-     * 
-     * @return array<string>
-     */
-    private function matchFileToClasses(string $filePath, array $prefixes): array
-    {
-        $classes = [];
-        $realFilePath = realpath($filePath);
-        
-        foreach ($prefixes as $prefix => $paths) {
-            if (!is_array($paths)) {
-                $paths = [$paths];
-            }
-            
-            foreach ($paths as $path) {
-                $realPath = realpath($path);
-                if ($realPath && str_starts_with($realFilePath, $realPath)) {
-                    $relativePath = substr($realFilePath, strlen($realPath) + 1);
-                    $className = $prefix . str_replace(['/', '.php'], ['\\', ''], $relativePath);
-                    
-                    if ($this->isClassSafe($className) && class_exists($className)) {
-                        $classes[] = $className;
-                    }
-                }
-            }
+        // Process remaining files
+        if (!empty($batch)) {
+            $this->processBatch($batch);
         }
-        
-        return $classes;
     }
 
     /**
-     * Sichere Fallback-Methode für Klassenextraktion
-     * 
-     * @return array<string>
+     * Process files in batches for better performance
      */
-    private function extractClassNamesFromFile(string $filePath): array
+    private function processBatch(array $filePaths): void
+    {
+        $allClasses = [];
+
+        foreach ($filePaths as $filePath) {
+            $classes = $this->scanFile($filePath);
+            $allClasses = array_merge($allClasses, $classes);
+        }
+
+        foreach ($allClasses as $className) {
+            $this->registerClass($className);
+        }
+
+        $this->processedFiles += count($filePaths);
+    }
+
+    /**
+     * Scan single file for route classes
+     */
+    private function scanFile(string $filePath): array
+    {
+        if (!$this->securityValidator->isFileSafe($filePath)) {
+            return [];
+        }
+
+        $content = $this->readFileSecurely($filePath);
+        if ($content === null) {
+            return [];
+        }
+
+        // Fast pre-screening
+        if (!$this->hasRouteAttributes($content)) {
+            return [];
+        }
+
+        return $this->extractClassNames($content, $filePath);
+    }
+
+    /**
+     * Read file content securely
+     */
+    private function readFileSecurely(string $filePath): ?string
     {
         $content = file_get_contents($filePath);
         if ($content === false) {
-            return [];
+            return null;
         }
 
-        // Sicherheitsprüfung des Inhalts
-        if (!$this->isContentSafe($content)) {
-            return [];
-        }
-
-        return $this->extractClassNames($content);
-    }
-
-    /**
-     * Prüft ob Dateiinhalt sicher ist
-     */
-    private function isContentSafe(string $content): bool
-    {
-        $dangerousPatterns = [
-            '/eval\s*\(/i',
-            '/system\s*\(/i',
-            '/exec\s*\(/i',
-            '/shell_exec\s*\(/i',
-            '/passthru\s*\(/i',
-            '/file_get_contents\s*\(\s*["\']php:\/\//i',
-            '/__halt_compiler\s*\(/i'
-        ];
-
-        foreach ($dangerousPatterns as $pattern) {
-            if (preg_match($pattern, $content)) {
-                return false;
+        // Validate content security
+        if (!$this->securityValidator->isContentSafe($content)) {
+            if ($this->strictMode) {
+                throw new \RuntimeException("Unsafe content detected in file: {$filePath}");
             }
+            return null;
         }
 
-        return true;
+        return $content;
     }
 
     /**
-     * Extract fully qualified class names from PHP file content
-     * 
-     * @return array<string>
+     * Fast check for route attributes
      */
-    private function extractClassNames(string $content): array
+    private function hasRouteAttributes(string $content): bool
     {
+        return str_contains($content, '#[Route') ||
+            str_contains($content, 'Route(') ||
+            preg_match('/#\[Route\s*\(/', $content) === 1;
+    }
+
+    /**
+     * Extract class names from file content
+     */
+    private function extractClassNames(string $content, string $filePath): array
+    {
+        $namespace = $this->extractNamespace($content);
         $classes = [];
-        $namespace = '';
 
-        // Extract namespace mit Sicherheitsprüfung
-        if (preg_match('/^namespace\s+([a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*);/m', $content, $nsMatch)) {
-            $candidate = trim($nsMatch[1]);
-            if ($this->isClassSafe($candidate)) {
-                $namespace = $candidate . '\\';
-            }
-        }
-
-        // Extract class declarations mit Sicherheitsprüfung
-        $pattern = '/^(?:final\s+)?(?:readonly\s+)?(?:abstract\s+)?class\s+([a-zA-Z_][a-zA-Z0-9_]*)/m';
+        // Extract class declarations
+        $pattern = '/^\s*(?:final\s+)?(?:readonly\s+)?(?:abstract\s+)?class\s+([a-zA-Z_][a-zA-Z0-9_]*)/m';
         if (preg_match_all($pattern, $content, $matches)) {
             foreach ($matches[1] as $className) {
-                if ($this->isClassSafe($className)) {
-                    $fullClassName = $namespace . $className;
-                    if ($this->isClassSafe($fullClassName)) {
+                if ($this->securityValidator->isClassNameSafe($className)) {
+                    $fullClassName = $namespace ? $namespace . '\\' . $className : $className;
+
+                    if ($this->isAllowedClass($fullClassName)) {
                         $classes[] = $fullClassName;
                     }
                 }
@@ -543,194 +253,494 @@ final readonly class ServiceDiscovery
     }
 
     /**
-     * Process Service attributes on a class
+     * Extract namespace from content
      */
-    private function processServiceAttributes(ReflectionClass $reflection): void
+    private function extractNamespace(string $content): ?string
     {
-        $attributes = $reflection->getAttributes(Service::class);
+        $pattern = '/^\s*namespace\s+([a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*)\s*;/m';
+        if (preg_match($pattern, $content, $matches)) {
+            $namespace = trim($matches[1]);
+            return $this->securityValidator->isNamespaceSafe($namespace) ? $namespace : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if class is allowed for route discovery
+     */
+    private function isAllowedClass(string $fullClassName): bool
+    {
+        // Allowed namespaces for route classes
+        $allowedNamespaces = [
+            'App\\Actions\\',
+            'App\\Controllers\\',
+            'App\\Http\\Actions\\',
+            'App\\Http\\Controllers\\',
+            'App\\Api\\',
+            'Modules\\'
+        ];
+
+        $hasValidNamespace = false;
+        foreach ($allowedNamespaces as $namespace) {
+            if (str_starts_with($fullClassName, $namespace)) {
+                $hasValidNamespace = true;
+                break;
+            }
+        }
+
+        if (!$hasValidNamespace) {
+            return false;
+        }
+
+        // Check class name suffixes
+        $className = basename(str_replace('\\', '/', $fullClassName));
+        $allowedSuffixes = ['Action', 'Controller', 'Handler'];
+
+        foreach ($allowedSuffixes as $suffix) {
+            if (str_ends_with($className, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Create file filter for iterator
+     */
+    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
+    {
+        $filename = $file->getFilename();
+
+        // Fast exclusion checks
+        if (str_starts_with($filename, '.') ||
+            str_starts_with($filename, '_') ||
+            str_starts_with($filename, '#')) {
+            return false;
+        }
+
+        if ($file->isDir()) {
+            return $this->isAllowedDirectory($filename);
+        }
+
+        // File validation
+        return $file->getExtension() === 'php' &&
+            $file->isReadable() &&
+            $file->getSize() > 0 &&
+            $file->getSize() <= 2097152; // 2MB limit
+    }
+
+    /**
+     * Check if directory is allowed
+     */
+    private function isAllowedDirectory(string $dirname): bool
+    {
+        $lowerName = strtolower($dirname);
+
+        // Check ignored directories
+        if (in_array($lowerName, array_map('strtolower', $this->ignoredDirectories), true)) {
+            return false;
+        }
+
+        // Additional security checks
+        $dangerousDirs = ['tmp', 'temp', 'log', 'logs', 'backup', 'backups'];
+        if (in_array($lowerName, $dangerousDirs, true)) {
+            return false;
+        }
+
+        return $this->isSecureDirectoryName($dirname);
+    }
+
+    /**
+     * Check if directory name is secure
+     */
+    private function isSecureDirectoryName(string $dirname): bool
+    {
+        // Dangerous directory names
+        $dangerous = [
+            'bin', 'sbin', 'etc', 'proc', 'dev', 'sys',
+            'admin', 'config', 'secret', 'private', 'hidden'
+        ];
+
+        return !in_array(strtolower($dirname), $dangerous, true);
+    }
+
+    /**
+     * Process glob pattern
+     */
+    private function processGlobPattern(string $pattern): void
+    {
+        $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
+        if ($matches === false) {
+            return;
+        }
+
+        // Limit number of directories
+        $matches = array_slice($matches, 0, 50);
+
+        foreach ($matches as $match) {
+            $this->scanDirectory($match);
+        }
+    }
+
+    /**
+     * Register discovered class with router
+     */
+    public function registerClass(string $className): void
+    {
+        // Check cache first
+        if (isset($this->classCache[$className])) {
+            return;
+        }
+
+        if (!$this->validateClass($className)) {
+            $this->classCache[$className] = false;
+            return;
+        }
+
+        try {
+            $reflection = new ReflectionClass($className);
+
+            // Security validation
+            if (!$this->securityValidator->isClassSecure($reflection)) {
+                $this->classCache[$className] = false;
+                return;
+            }
+
+            $this->processRouteAttributes($reflection);
+            $this->classCache[$className] = true;
+
+        } catch (\Throwable $e) {
+            $this->classCache[$className] = false;
+
+            if ($this->strictMode) {
+                throw $e;
+            }
+            error_log("Failed to register class {$className}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Validate discovered class
+     */
+    private function validateClass(string $className): bool
+    {
+        if (!$this->securityValidator->isClassNameSafe($className)) {
+            return false;
+        }
+
+        if (!class_exists($className)) {
+            return false;
+        }
+
+        try {
+            $reflection = new ReflectionClass($className);
+
+            // Must be invokable (have __invoke method)
+            if (!$reflection->hasMethod('__invoke')) {
+                return false;
+            }
+
+            $invokeMethod = $reflection->getMethod('__invoke');
+            if (!$this->securityValidator->isMethodSafe($invokeMethod)) {
+                return false;
+            }
+
+            return true;
+
+        } catch (\ReflectionException $e) {
+            if ($this->strictMode) {
+                throw $e;
+            }
+            error_log("Reflection error for class {$className}: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Process route attributes for class
+     */
+    private function processRouteAttributes(ReflectionClass $reflection): void
+    {
+        $attributes = $reflection->getAttributes(Route::class);
 
         foreach ($attributes as $attribute) {
             try {
-                /** @var Service $service */
-                $service = $attribute->newInstance();
-                
-                $className = $reflection->getName();
-                $serviceId = $service->id ?? $className;
-                
-                // Sicherheitsprüfung der Service-ID
-                if (!$this->isServiceIdSafe($serviceId)) {
-                    continue;
-                }
-                
-                // Register the service
-                if ($service->singleton) {
-                    $this->container->singleton($serviceId, $className);
-                } else {
-                    $this->container->bind($serviceId, $className);
+                /** @var Route $route */
+                $route = $attribute->newInstance();
+
+                // Register main route
+                $this->registerRoute($route, $reflection->getName());
+
+                // Register additional methods if specified
+                foreach ($route->methods as $additionalMethod) {
+                    $additionalRoute = new Route(
+                        $additionalMethod,
+                        $route->path,
+                        $route->middleware,
+                        $route->name ? $route->name . '.' . strtolower($additionalMethod) : null,
+                        $route->subdomain,
+                        $route->options,
+                        $route->schemes
+                    );
+                    $this->registerRoute($additionalRoute, $reflection->getName());
                 }
 
-                // Register by implemented interfaces
-                $this->registerInterfaces($reflection, $className, $service->singleton);
+                $this->discoveredRoutes++;
 
-                // Handle tags mit Validierung
-                $this->registerTags($service->tags, $serviceId);
-                
-            } catch (\Throwable) {
-                // Skip fehlerhafte Service-Attribute
-                continue;
+            } catch (\Throwable $e) {
+                if ($this->strictMode) {
+                    throw $e;
+                }
+                error_log("Failed to process route for {$reflection->getName()}: " . $e->getMessage());
             }
         }
     }
 
     /**
-     * Validiert Service-IDs
+     * Register single route with router
      */
-    private function isServiceIdSafe(string $serviceId): bool
+    private function registerRoute(Route $route, string $actionClass): void
     {
-        return !empty($serviceId) &&
-               !str_contains($serviceId, '..') &&
-               !str_contains($serviceId, '/') &&
-               preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $serviceId) === 1;
+        $this->router->addRoute(
+            $route->method,
+            $route->path,
+            $actionClass,
+            $route->middleware,
+            $route->name,
+            $route->subdomain
+        );
     }
 
     /**
-     * Register service by its implemented interfaces
+     * Discover routes in specific files
      */
-    private function registerInterfaces(ReflectionClass $reflection, string $className, bool $singleton): void
+    public function discoverInFiles(array $filePaths): void
     {
-        foreach ($reflection->getInterfaces() as $interface) {
-            $interfaceName = $interface->getName();
-            
-            // Skip built-in und gefährliche interfaces
-            if ($this->isInterfaceSafe($interfaceName)) {
-                try {
-                    if ($singleton) {
-                        $this->container->singleton($interfaceName, $className);
-                    } else {
-                        $this->container->bind($interfaceName, $className);
-                    }
-                } catch (\Throwable) {
-                    // Skip fehlerhafte Interface-Registrierung
-                    continue;
-                }
-            }
+        $this->validateFilePaths($filePaths);
+        $this->resetCounters();
+
+        $this->processBatch($filePaths);
+    }
+
+    /**
+     * Check if class has route attributes
+     */
+    public function hasRouteAttributes(string $className): bool
+    {
+        if (!class_exists($className)) {
+            return false;
+        }
+
+        try {
+            $reflection = new ReflectionClass($className);
+            return !empty($reflection->getAttributes(Route::class));
+        } catch (\ReflectionException) {
+            return false;
         }
     }
 
     /**
-     * Prüft ob Interface sicher ist
+     * Get discovery statistics
      */
-    private function isInterfaceSafe(string $interfaceName): bool
+    public function getStats(): array
     {
-        $unsafeInterfaces = [
-            'Traversable',
-            'Iterator',
-            'ArrayAccess',
-            'Serializable',
-            'Closure'
+        return [
+            'processed_files' => $this->processedFiles,
+            'discovered_routes' => $this->discoveredRoutes,
+            'cached_classes' => count($this->classCache),
+            'successful_classes' => count(array_filter($this->classCache)),
+            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
+            'success_rate' => $this->successRate,
+            'memory_usage' => memory_get_usage(true),
+            'peak_memory' => memory_get_peak_usage(true),
+            'strict_mode' => $this->strictMode,
+            'max_depth' => $this->maxDepth,
+        ];
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCache(): void
+    {
+        $this->classCache = [];
+        $this->resetCounters();
+    }
+
+    /**
+     * Reset performance counters
+     */
+    private function resetCounters(): void
+    {
+        $this->processedFiles = 0;
+        $this->discoveredRoutes = 0;
+    }
+
+    /**
+     * Auto-discover with default paths
+     */
+    public function autoDiscover(): void
+    {
+        $defaultPaths = [
+            'app/Actions',
+            'app/Controllers',
+            'app/Http/Actions',
+            'app/Http/Controllers',
+            'src/Actions',
+            'src/Controllers'
         ];
 
-        foreach ($unsafeInterfaces as $unsafe) {
-            if (str_starts_with($interfaceName, $unsafe)) {
-                return false;
-            }
+        $existingPaths = array_filter($defaultPaths, 'is_dir');
+
+        if (empty($existingPaths)) {
+            throw new \RuntimeException('No default discovery paths found');
         }
 
-        return $this->isServiceIdSafe($interfaceName);
+        $this->discover($existingPaths);
     }
 
     /**
-     * Register service tags mit Validierung
-     * 
-     * @param array<string> $tags
+     * Discover routes with pattern matching
      */
-    private function registerTags(array $tags, string $serviceId): void
+    public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
     {
-        foreach ($tags as $tag) {
-            if ($this->isServiceIdSafe($tag)) {
-                try {
-                    $this->container->tag($serviceId, $tag);
-                } catch (\Throwable) {
-                    // Skip fehlerhafte Tag-Registrierung
-                    continue;
-                }
-            }
+        if (!is_dir($baseDir)) {
+            throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
         }
+
+        if (!$this->securityValidator->isPathSafe($baseDir)) {
+            throw new \InvalidArgumentException("Base directory is not safe: {$baseDir}");
+        }
+
+        $fullPattern = rtrim($baseDir, '/') . '/' . ltrim($pattern, '/');
+        $files = glob($fullPattern, GLOB_BRACE);
+
+        if ($files === false) {
+            throw new \RuntimeException("Failed to execute glob pattern: {$fullPattern}");
+        }
+
+        $this->discoverInFiles($files);
     }
 
     /**
-     * Process Factory method attributes
+     * Get allowed paths for security validator
      */
-    private function processFactoryMethods(ReflectionClass $reflection): void
+    private function getAllowedPaths(): array
     {
-        foreach ($reflection->getMethods() as $method) {
-            // Nur statische und sichere Methoden
-            if (!$method->isStatic() || !$this->isMethodSafe($method)) {
-                continue;
-            }
-
-            $attributes = $method->getAttributes(Factory::class);
-            
-            foreach ($attributes as $attribute) {
-                try {
-                    /** @var Factory $factory */
-                    $factory = $attribute->newInstance();
-                    
-                    // Sicherheitsprüfung der Factory-Ziele
-                    if (!$this->isServiceIdSafe($factory->creates)) {
-                        continue;
-                    }
-                    
-                    $factoryCallable = function(Container $container) use ($reflection, $method) {
-                        try {
-                            return $method->invoke(null, $container);
-                        } catch (\Throwable $e) {
-                            throw ContainerException::cannotResolve(
-                                $factory->creates ?? 'unknown',
-                                "Factory method failed: {$e->getMessage()}"
-                            );
-                        }
-                    };
-                    
-                    if ($factory->singleton) {
-                        $this->container->singleton($factory->creates, $factoryCallable);
-                    } else {
-                        $this->container->bind($factory->creates, $factoryCallable);
-                    }
-
-                    // Handle factory tags mit Validierung
-                    $this->registerTags($factory->tags, $factory->creates);
-                    
-                } catch (\Throwable) {
-                    // Skip fehlerhafte Factory-Attribute
-                    continue;
-                }
-            }
-        }
-    }
-
-    /**
-     * Prüft ob eine Methode sicher als Factory verwendet werden kann
-     */
-    private function isMethodSafe(\ReflectionMethod $method): bool
-    {
-        // Gefährliche Methodennamen
-        $dangerousMethods = [
-            'eval',
-            'system', 
-            'exec',
-            'shell_exec',
-            'passthru',
-            '__destruct',
-            '__wakeup',
-            '__unserialize'
+        return [
+            getcwd(),
+            getcwd() . '/app',
+            getcwd() . '/src',
+            getcwd() . '/modules'
         ];
+    }
 
-        $methodName = strtolower($method->getName());
-        
-        return !in_array($methodName, $dangerousMethods, true) &&
-               !str_starts_with($methodName, '__') &&
-               $method->isPublic() &&
-               $method->isStatic();
+    // === Validation Methods ===
+
+    /**
+     * Validate configuration
+     */
+    private function validateConfiguration(): void
+    {
+        if ($this->maxDepth < 1 || $this->maxDepth > 20) {
+            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
+        }
+
+        // Validate ignored directories
+        foreach ($this->ignoredDirectories as $dir) {
+            if (!is_string($dir) || strlen($dir) > 100) {
+                throw new \InvalidArgumentException('Invalid ignored directory specification');
+            }
+        }
+    }
+
+    /**
+     * Validate directories input
+     */
+    private function validateDirectories(array $directories): void
+    {
+        if (empty($directories)) {
+            throw new \InvalidArgumentException('At least one directory must be specified');
+        }
+
+        if (count($directories) > 20) {
+            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
+        }
+
+        foreach ($directories as $directory) {
+            if (!is_string($directory)) {
+                throw new \InvalidArgumentException('Directory must be a string');
+            }
+
+            if (strlen($directory) > 500) {
+                throw new \InvalidArgumentException('Directory path too long');
+            }
+
+            if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
+                throw new \InvalidArgumentException('Directory path contains invalid characters');
+            }
+        }
+    }
+
+    /**
+     * Validate file paths input
+     */
+    private function validateFilePaths(array $filePaths): void
+    {
+        if (empty($filePaths)) {
+            throw new \InvalidArgumentException('At least one file path must be specified');
+        }
+
+        if (count($filePaths) > 100) {
+            throw new \InvalidArgumentException('Too many files to scan (max 100)');
+        }
+
+        foreach ($filePaths as $filePath) {
+            if (!is_string($filePath)) {
+                throw new \InvalidArgumentException('File path must be a string');
+            }
+
+            if (strlen($filePath) > 500) {
+                throw new \InvalidArgumentException('File path too long');
+            }
+
+            if (str_contains($filePath, "\0") || str_contains($filePath, '..')) {
+                throw new \InvalidArgumentException('File path contains invalid characters');
+            }
+        }
+    }
+
+    /**
+     * Get discovered routes summary
+     */
+    public function getDiscoveredRoutes(): array
+    {
+        return [
+            'total_routes' => $this->discoveredRoutes,
+            'routes_per_file' => $this->processedFiles > 0
+                ? round($this->discoveredRoutes / $this->processedFiles, 2)
+                : 0,
+            'successful_classes' => count(array_filter($this->classCache)),
+            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
+            'success_rate' => $this->successRate
+        ];
+    }
+
+    /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'processed_files' => $this->processedFiles,
+            'discovered_routes' => $this->discoveredRoutes,
+            'cached_classes' => count($this->classCache),
+            'success_rate' => round($this->successRate, 2) . '%',
+            'strict_mode' => $this->strictMode,
+            'max_depth' => $this->maxDepth,
+            'has_security_validator' => true
+        ];
     }
 }

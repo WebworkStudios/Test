@@ -7,7 +7,7 @@ namespace Framework\Container;
 /**
  * Enhanced Service Provider für organizing service registrations mit PHP 8.4 Features
  *
- * Erweiterte Service Provider Klasse mit Prioritäten, Conditional Loading,
+ * Vereinfachte Service Provider Klasse mit Prioritäten, Conditional Loading,
  * Validierung und verbesserter Fehlerbehandlung.
  *
  * @example
@@ -34,6 +34,22 @@ namespace Framework\Container;
  */
 abstract class ServiceProvider
 {
+    // Property Hooks für computed properties
+    public bool $canLoad {
+        get => $this->shouldLoad() && $this->validateRequirements();
+    }
+
+    public array $dependencies {
+        get => [
+            'config' => $this->requiredConfig,
+            'services' => $this->requiredServices
+        ];
+    }
+
+    public bool $hasValidRequirements {
+        get => $this->validateRequirements();
+    }
+
     protected int $priority = 0;
     protected array $requiredConfig = [];
     protected array $requiredServices = [];
@@ -68,14 +84,13 @@ abstract class ServiceProvider
     public function shouldLoad(): bool
     {
         return match (true) {
-            !$this->validateRequirements() => false,
             $this->loadOnDemand => false, // Wird später bei Bedarf geladen
             default => true
         };
     }
 
     /**
-     * Validiert erforderliche Konfiguration und Services mit PHP 8.4 Features
+     * Validiert erforderliche Konfiguration und Services
      */
     protected function validateRequirements(): bool
     {
@@ -288,7 +303,7 @@ abstract class ServiceProvider
     }
 
     /**
-     * Conditional Service Registration mit erweiterten Bedingungen
+     * Conditional Service Registration mit vereinfachten Bedingungen
      */
     protected function bindIf(string $condition, string $id, mixed $concrete = null, bool $singleton = false): void
     {
@@ -298,7 +313,7 @@ abstract class ServiceProvider
     }
 
     /**
-     * Evaluiert Bedingungen für Conditional Loading mit PHP 8.4 match
+     * Vereinfachte Bedingungsauswertung mit PHP 8.4 match
      */
     protected function evaluateCondition(string $condition): bool
     {
@@ -307,66 +322,8 @@ abstract class ServiceProvider
             'production' => $this->getConfig('app.env') === 'production',
             'development' => $this->getConfig('app.env') === 'development',
             'testing' => $this->getConfig('app.env') === 'testing',
-            default => $this->evaluateComplexCondition($condition)
-        };
-    }
-
-    /**
-     * Erweiterte Bedingungsauswertung
-     */
-    private function evaluateComplexCondition(string $condition): bool
-    {
-        return match (true) {
-            str_contains($condition, '&&') => $this->evaluateAndCondition($condition),
-            str_contains($condition, '||') => $this->evaluateOrCondition($condition),
-            str_contains($condition, '===') => $this->evaluateEqualsCondition($condition),
-            str_contains($condition, '!==') => $this->evaluateNotEqualsCondition($condition),
             default => $this->hasConfig($condition)
         };
-    }
-
-    private function evaluateAndCondition(string $condition): bool
-    {
-        $parts = array_map('trim', explode('&&', $condition));
-        foreach ($parts as $part) {
-            if (!$this->evaluateCondition($part)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private function evaluateOrCondition(string $condition): bool
-    {
-        $parts = array_map('trim', explode('||', $condition));
-        foreach ($parts as $part) {
-            if ($this->evaluateCondition($part)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private function evaluateEqualsCondition(string $condition): bool
-    {
-        $parts = array_map('trim', explode('===', $condition));
-        if (count($parts) !== 2) return false;
-
-        $value = $this->getConfig($parts[0]);
-        $expected = trim($parts[1], '"\'');
-
-        return $value === $expected;
-    }
-
-    private function evaluateNotEqualsCondition(string $condition): bool
-    {
-        $parts = array_map('trim', explode('!==', $condition));
-        if (count($parts) !== 2) return false;
-
-        $value = $this->getConfig($parts[0]);
-        $expected = trim($parts[1], '"\'');
-
-        return $value !== $expected;
     }
 
     /**
@@ -385,31 +342,6 @@ abstract class ServiceProvider
                 );
             }
         };
-    }
-
-    /**
-     * Bulk-Registrierung von Services mit verbesserter Fehlerbehandlung
-     *
-     * @param array<string, mixed> $services
-     */
-    protected function registerServices(array $services): void
-    {
-        foreach ($services as $id => $definition) {
-            if (!is_string($id)) {
-                continue;
-            }
-
-            try {
-                match (true) {
-                    is_array($definition) => $this->registerService($id, $definition['concrete'] ?? $id, $definition),
-                    is_callable($definition) => $this->singleton($id, $definition),
-                    default => $this->bind($id, $definition)
-                };
-            } catch (\Throwable $e) {
-                // Protokolliere Fehler, aber stoppe nicht die gesamte Registrierung
-                error_log("Failed to register service '{$id}' in " . static::class . ": " . $e->getMessage());
-            }
-        }
     }
 
     /**
@@ -457,7 +389,9 @@ abstract class ServiceProvider
             'provides' => $this->provides(),
             'required_config' => $this->requiredConfig,
             'required_services' => $this->requiredServices,
-            'should_load' => $this->shouldLoad()
+            'should_load' => $this->shouldLoad(),
+            'can_load' => $this->canLoad,
+            'has_valid_requirements' => $this->hasValidRequirements
         ];
     }
 
@@ -486,13 +420,101 @@ abstract class ServiceProvider
     }
 
     /**
-     * Get provider dependencies
+     * Batch registration with error handling
      */
-    public function getDependencies(): array
+    protected function registerBatch(array $definitions): void
+    {
+        foreach ($definitions as $id => $definition) {
+            if (!is_string($id)) {
+                continue;
+            }
+
+            try {
+                match (true) {
+                    is_array($definition) => $this->registerService($id, $definition['concrete'] ?? $id, $definition),
+                    is_callable($definition) => $this->singleton($id, $definition),
+                    default => $this->bind($id, $definition)
+                };
+            } catch (\Throwable $e) {
+                error_log("Failed to register service '{$id}' in " . static::class . ": " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Register services with common configuration
+     */
+    protected function registerGroup(array $services, array $commonOptions = []): void
+    {
+        foreach ($services as $id => $concrete) {
+            if (!is_string($id)) continue;
+
+            $options = match (true) {
+                is_array($concrete) => array_merge($commonOptions, $concrete),
+                default => array_merge($commonOptions, ['concrete' => $concrete])
+            };
+
+            $this->registerService($id, $options['concrete'] ?? $id, $options);
+        }
+    }
+
+    /**
+     * Register conditional services based on environment
+     */
+    protected function registerConditional(array $conditions): void
+    {
+        foreach ($conditions as $condition => $services) {
+            if ($this->evaluateCondition($condition)) {
+                match (true) {
+                    is_array($services) => $this->registerBatch($services),
+                    is_callable($services) => $services($this),
+                    default => null
+                };
+            }
+        }
+    }
+
+    /**
+     * Register aliases for services
+     */
+    protected function registerAliases(array $aliases): void
+    {
+        foreach ($aliases as $alias => $target) {
+            if (is_string($alias) && is_string($target)) {
+                $this->bind($alias, $target);
+            }
+        }
+    }
+
+    /**
+     * Check if all dependencies are available
+     */
+    public function checkDependencies(): array
+    {
+        $missing = [];
+
+        foreach ($this->requiredServices as $serviceId) {
+            if (!$this->container->isRegistered($serviceId)) {
+                $missing[] = $serviceId;
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
     {
         return [
-            'config' => $this->requiredConfig,
-            'services' => $this->requiredServices
+            'class' => static::class,
+            'priority' => $this->priority,
+            'can_load' => $this->canLoad,
+            'is_deferred' => $this->isDeferred(),
+            'required_config_count' => count($this->requiredConfig),
+            'required_services_count' => count($this->requiredServices),
+            'validation_errors' => $this->validate()
         ];
     }
 }

@@ -7,11 +7,34 @@ namespace Framework\Container;
 /**
  * Framework Container Exception mit PHP 8.4 Features
  *
- * Keine PSR-11 Abhängigkeit, optimiert für unser Framework.
- * Fokus auf Performance und bessere Fehlerdiagnose.
+ * Vereinfachte Exception-Klasse mit besserer Fehlerdiagnose
+ * und optimierter Performance.
  */
 class ContainerException extends \Exception
 {
+    // Property Hooks für computed properties
+    public bool $hasContext {
+        get => !empty($this->context);
+    }
+
+    public bool $hasServiceId {
+        get => $this->serviceId !== null;
+    }
+
+    public string $shortMessage {
+        get => $this->extractShortMessage();
+    }
+
+    public array $debugInfo {
+        get => [
+            'message' => $this->getMessage(),
+            'code' => $this->getCode(),
+            'service_id' => $this->serviceId,
+            'context_keys' => array_keys($this->context),
+            'has_previous' => $this->getPrevious() !== null
+        ];
+    }
+
     private array $context = [];
     private ?string $serviceId = null;
 
@@ -35,19 +58,62 @@ class ContainerException extends \Exception
         $sanitized = [];
 
         foreach ($context as $key => $value) {
-            if (!is_string($key) || str_contains($key, '..')) {
+            if (!is_string($key) || str_contains($key, '..') || strlen($key) > 100) {
                 continue;
             }
 
             $sanitized[$key] = match (true) {
                 is_scalar($value) => $value,
-                is_array($value) => $this->sanitizeContext($value),
+                is_array($value) => $this->sanitizeArray($value),
                 is_object($value) => $value::class,
                 default => gettype($value)
             };
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Sanitize array values recursively (with depth limit)
+     */
+    private function sanitizeArray(array $array, int $depth = 0): array
+    {
+        if ($depth > 3) { // Prevent deep recursion
+            return ['...' => 'max_depth_reached'];
+        }
+
+        $sanitized = [];
+        $count = 0;
+
+        foreach ($array as $key => $value) {
+            if ($count >= 10) { // Limit array size in context
+                $sanitized['...'] = 'truncated';
+                break;
+            }
+
+            if (is_string($key) && strlen($key) <= 50) {
+                $sanitized[$key] = match (true) {
+                    is_scalar($value) => $value,
+                    is_array($value) => $this->sanitizeArray($value, $depth + 1),
+                    is_object($value) => $value::class,
+                    default => gettype($value)
+                };
+            }
+
+            $count++;
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Extract short message for logging
+     */
+    private function extractShortMessage(): string
+    {
+        $message = $this->getMessage();
+        $firstLine = strtok($message, "\n");
+        return strlen($firstLine) > 100 ? substr($firstLine, 0, 97) . '...' : $firstLine;
     }
 
     public function getContext(): array
@@ -65,7 +131,7 @@ class ContainerException extends \Exception
      */
     public static function cannotResolve(string $service, string $reason = '', array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
+        $safeService = self::sanitizeServiceName($service);
 
         $message = "Cannot resolve service '{$safeService}'";
         if ($reason !== '') {
@@ -80,7 +146,7 @@ class ContainerException extends \Exception
      */
     public static function invalidService(string $service, string $reason, array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
+        $safeService = self::sanitizeServiceName($service);
 
         return new self(
             "Invalid service definition for '{$safeService}': {$reason}",
@@ -97,11 +163,14 @@ class ContainerException extends \Exception
     public static function circularDependency(array $chain, array $context = []): self
     {
         $safeChain = array_map(
-            fn($item) => preg_replace('/[^\w\\\\.]/', '', (string)$item),
-            $chain
+            fn($item) => self::sanitizeServiceName((string)$item),
+            array_slice($chain, 0, 20) // Limit chain length
         );
 
         $chainStr = implode(' -> ', $safeChain);
+        if (count($chain) > 20) {
+            $chainStr .= ' -> ...';
+        }
 
         return new self(
             "Circular dependency detected: {$chainStr}",
@@ -116,7 +185,7 @@ class ContainerException extends \Exception
      */
     public static function securityViolation(string $service, string $reason, array $context = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\.]/', '', $service);
+        $safeService = self::sanitizeServiceName($service);
 
         return new self(
             "Security violation for service '{$safeService}': {$reason}",
@@ -132,7 +201,7 @@ class ContainerException extends \Exception
      */
     public static function configurationError(string $key, string $reason, array $context = []): self
     {
-        $safeKey = preg_replace('/[^\w\.]', '', $key);
+        $safeKey = self::sanitizeConfigKey($key);
 
         return new self(
             "Configuration error for key '{$safeKey}': {$reason}",
@@ -143,30 +212,126 @@ class ContainerException extends \Exception
     }
 
     /**
-     * Für strukturiertes Logging
+     * Sanitize service name for safe output
      */
-    public function toArray(): array
+    protected static function sanitizeServiceName(string $service): string
     {
-        return [
-            'message' => $this->getMessage(),
-            'code' => $this->getCode(),
-            'file' => $this->getFile(),
-            'line' => $this->getLine(),
-            'service_id' => $this->serviceId,
-            'context' => $this->context,
-            'trace' => $this->getTraceAsString()
-        ];
+        $sanitized = preg_replace('/[^\w\\\\.]/s', '', $service);
+        return strlen($sanitized) > 100 ? substr($sanitized, 0, 97) . '...' : $sanitized;
+    }
+
+    /**
+     * Sanitize config key for safe output
+     */
+    private static function sanitizeConfigKey(string $key): string
+    {
+        $sanitized = preg_replace('/[^\w.]/', '', $key);
+        return strlen($sanitized) > 100 ? substr($sanitized, 0, 97) . '...' : $sanitized;
+    }
+
+    /**
+     * Check if exception is caused by missing dependency
+     */
+    public function isMissingDependency(): bool
+    {
+        return $this->getCode() === 1001 ||
+            str_contains($this->getMessage(), 'not found') ||
+            str_contains($this->getMessage(), 'Cannot resolve');
+    }
+
+    /**
+     * Check if exception is security-related
+     */
+    public function isSecurityViolation(): bool
+    {
+        return $this->getCode() === 1004 ||
+            str_contains($this->getMessage(), 'Security violation');
+    }
+
+    /**
+     * Check if exception is configuration-related
+     */
+    public function isConfigurationError(): bool
+    {
+        return $this->getCode() === 1005 ||
+            str_contains($this->getMessage(), 'Configuration error');
+    }
+
+    /**
+     * Get exception category for logging/monitoring
+     */
+    public function getCategory(): string
+    {
+        return match ($this->getCode()) {
+            1001 => 'resolution_failure',
+            1002 => 'invalid_service',
+            1003 => 'circular_dependency',
+            1004 => 'security_violation',
+            1005 => 'configuration_error',
+            default => 'unknown_error'
+        };
+    }
+
+    /**
+     * Get user-friendly error message
+     */
+    public function getUserMessage(): string
+    {
+        return match ($this->getCode()) {
+            1001 => "Service dependency could not be resolved. Please check your service configuration.",
+            1002 => "Invalid service configuration detected. Please review your service definitions.",
+            1003 => "Circular dependency detected in your services. Please restructure your dependencies.",
+            1004 => "Security violation detected. Please check your service implementations.",
+            1005 => "Configuration error detected. Please verify your application configuration.",
+            default => "An unexpected container error occurred."
+        };
+    }
+
+    /**
+     * Create exception with more context
+     */
+    public function withContext(array $additionalContext): self
+    {
+        return new self(
+            $this->getMessage(),
+            $this->getCode(),
+            $this->getPrevious(),
+            array_merge($this->context, $additionalContext),
+            $this->serviceId
+        );
+    }
+
+    /**
+     * Create exception with different service ID
+     */
+    public function withServiceId(string $serviceId): self
+    {
+        return new self(
+            $this->getMessage(),
+            $this->getCode(),
+            $this->getPrevious(),
+            $this->context,
+            $serviceId
+        );
+    }
+
+    /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
+    {
+        return $this->debugInfo;
     }
 
     public function __toString(): string
     {
         $result = parent::__toString();
 
-        if (!empty($this->context)) {
-            $result .= "\nContext: " . json_encode($this->context, JSON_PRETTY_PRINT);
+        if ($this->hasContext) {
+            $result .= "\nContext: " . json_encode($this->context, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         }
 
-        if ($this->serviceId !== null) {
+        if ($this->hasServiceId) {
             $result .= "\nService ID: {$this->serviceId}";
         }
 
@@ -177,10 +342,19 @@ class ContainerException extends \Exception
 /**
  * Exception thrown when requested service is not found
  *
- * Erweiterte NotFound-Exception mit Service-Vorschlägen
+ * Vereinfachte NotFound-Exception mit Service-Vorschlägen
  */
 class ContainerNotFoundException extends ContainerException
 {
+    // Property Hooks für computed properties
+    public bool $hasSuggestions {
+        get => !empty($this->suggestions);
+    }
+
+    public int $suggestionCount {
+        get => count($this->suggestions);
+    }
+
     private array $suggestions = [];
 
     /**
@@ -188,7 +362,7 @@ class ContainerNotFoundException extends ContainerException
      */
     public static function serviceNotFound(string $service, array $availableServices = []): self
     {
-        $safeService = preg_replace('/[^\w\\\\.]/s', '', $service);
+        $safeService = self::sanitizeServiceName($service);
 
         $exception = new self(
             "Service '{$safeService}' not found in container",
@@ -208,7 +382,7 @@ class ContainerNotFoundException extends ContainerException
      */
     public static function tagNotFound(string $tag, array $availableTags = []): self
     {
-        $safeTag = preg_replace('/[^\w\.]', '', $tag);
+        $safeTag = preg_replace('/[^\w.]/', '', $tag);
 
         $exception = new self(
             "No services found with tag '{$safeTag}'",
@@ -223,7 +397,7 @@ class ContainerNotFoundException extends ContainerException
     }
 
     /**
-     * Findet ähnliche Services basierend auf String-ÄÄhnlichkeit mit PHP 8.4 match
+     * Findet ähnliche Services basierend auf String-Ähnlichkeit
      */
     private function findSimilarServices(string $needle, array $haystack): array
     {
@@ -234,8 +408,8 @@ class ContainerNotFoundException extends ContainerException
         $suggestions = [];
         $needle = strtolower($needle);
 
-        foreach ($haystack as $service) {
-            if (!is_string($service)) {
+        foreach (array_slice($haystack, 0, 100) as $service) { // Limit processing
+            if (!is_string($service) || strlen($service) > 255) {
                 continue;
             }
 
@@ -275,7 +449,7 @@ class ContainerNotFoundException extends ContainerException
     {
         $distance = levenshtein($needle, $service);
         $maxLen = max(strlen($needle), strlen($service));
-        return 1 - ($distance / $maxLen);
+        return $maxLen > 0 ? 1 - ($distance / $maxLen) : 0;
     }
 
     private function similarTextSimilarity(string $needle, string $service): float
@@ -297,7 +471,7 @@ class ContainerNotFoundException extends ContainerException
     {
         $message = $this->getMessage();
 
-        if (!empty($this->suggestions)) {
+        if ($this->hasSuggestions) {
             $message .= "\n\nDid you mean one of these?";
             foreach ($this->suggestions as $suggestion) {
                 $message .= "\n  - {$suggestion}";
@@ -312,7 +486,7 @@ class ContainerNotFoundException extends ContainerException
         $result = $this->getMessageWithSuggestions();
         $result .= "\n\nStack trace:\n" . $this->getTraceAsString();
 
-        if (!empty($this->getContext())) {
+        if ($this->hasContext) {
             $result .= "\n\nContext: " . json_encode($this->getContext(), JSON_PRETTY_PRINT);
         }
 
