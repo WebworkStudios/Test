@@ -24,6 +24,22 @@ final readonly class Cookie
     }
 
     /**
+     * Validate cookie properties using match expression
+     */
+    private function validate(): void
+    {
+        match (true) {
+            $this->name === '' || preg_match('/[=,; \t\r\n\013\014]/', $this->name)
+            => throw new \InvalidArgumentException("Invalid cookie name: {$this->name}"),
+            preg_match('/[,; \t\r\n\013\014]/', $this->value)
+            => throw new \InvalidArgumentException("Invalid cookie value"),
+            $this->samesite !== '' && !in_array($this->samesite, ['Strict', 'Lax', 'None'], true)
+            => throw new \InvalidArgumentException("Invalid SameSite value: {$this->samesite}"),
+            default => null
+        };
+    }
+
+    /**
      * Create cookie that expires in given seconds
      */
     public static function expiresIn(string $name, string $value, int $seconds): self
@@ -88,21 +104,5 @@ final readonly class Cookie
         }
 
         return $cookie;
-    }
-
-    /**
-     * Validate cookie properties using match expression
-     */
-    private function validate(): void
-    {
-        match(true) {
-            $this->name === '' || preg_match('/[=,; \t\r\n\013\014]/', $this->name)
-            => throw new \InvalidArgumentException("Invalid cookie name: {$this->name}"),
-            preg_match('/[,; \t\r\n\013\014]/', $this->value)
-            => throw new \InvalidArgumentException("Invalid cookie value"),
-            $this->samesite !== '' && !in_array($this->samesite, ['Strict', 'Lax', 'None'], true)
-            => throw new \InvalidArgumentException("Invalid SameSite value: {$this->samesite}"),
-            default => null
-        };
     }
 }

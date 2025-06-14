@@ -30,7 +30,8 @@ final class RouteFileScanner
 
     public function __construct(
         private readonly array $config = []
-    ) {
+    )
+    {
         $this->initializePatterns();
     }
 
@@ -49,43 +50,118 @@ final class RouteFileScanner
     }
 
     /**
-     * Scan single file for route classes
+     * Validate discovered class
      */
-    public function scanFile(string $filePath): array
+    public function validateClass(string $className): bool
     {
-        $this->totalFiles++;
-
-        if (!$this->isValidPhpFile($filePath)) {
-            return [];
+        if (!class_exists($className)) {
+            return false;
         }
 
-        $cacheKey = $this->generateCacheKey($filePath);
+        try {
+            $reflection = new \ReflectionClass($className);
 
-        // Check cache first
-        if (isset($this->fileCache[$cacheKey])) {
-            $cached = $this->fileCache[$cacheKey];
-            if ($this->isCacheValid($filePath, $cached['timestamp'])) {
-                $this->cacheHits++;
-                return $cached['classes'];
+            // Must be invokable (have __invoke method)
+            if (!$reflection->hasMethod('__invoke')) {
+                return false;
+            }
+
+            // Security checks
+            if ($this->hasSecurityRisks($reflection)) {
+                return false;
+            }
+
+            return true;
+
+        } catch (\ReflectionException $e) {
+            if ($this->strictMode) {
+                throw $e;
+            }
+            error_log("Reflection error for class {$className}: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Check class for security risks
+     */
+    private function hasSecurityRisks(\ReflectionClass $reflection): bool
+    {
+        // Check for dangerous methods
+        $dangerousMethods = [
+            'exec', 'system', 'shell_exec', 'passthru', 'eval',
+            'file_get_contents', 'file_put_contents', 'fopen'
+        ];
+
+        $methods = $reflection->getMethods(\ReflectionMethod::IS_PUBLIC);
+        foreach ($methods as $method) {
+            if (in_array($method->getName(), $dangerousMethods, true)) {
+                return true;
             }
         }
 
+        // Check dangerous interfaces
+        $dangerousInterfaces = ['Serializable'];
+        foreach ($dangerousInterfaces as $interface) {
+            if ($reflection->implementsInterface($interface)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get scanning statistics
+     */
+    public function getStats(): array
+    {
+        return [
+            'total_files_scanned' => $this->totalFiles,
+            'cache_hits' => $this->cacheHits,
+            'cache_hit_ratio' => $this->cacheHitRatio,
+            'cached_files' => count($this->fileCache),
+            'max_file_size' => $this->maxFileSize,
+            'strict_mode' => $this->strictMode,
+            'memory_usage' => memory_get_usage(true),
+        ];
+    }
+
+    /**
+     * Clear file cache
+     */
+    public function clearCache(): void
+    {
+        $this->fileCache = [];
+        $this->cacheHits = 0;
+        $this->totalFiles = 0;
+    }
+
+    /**
+     * Get cache efficiency metrics
+     */
+    public function getCacheEfficiency(): array
+    {
+        return [
+            'cache_size' => count($this->fileCache),
+            'hit_ratio' => $this->cacheHitRatio,
+            'memory_per_file' => count($this->fileCache) > 0
+                ? memory_get_usage(true) / count($this->fileCache)
+                : 0,
+        ];
+    }
+
+    /**
+     * Check if specific file has route attributes
+     */
+    public function fileHasRoutes(string $filePath): bool
+    {
+        if (!$this->isValidPhpFile($filePath)) {
+            return false;
+        }
+
         $content = $this->readFileSecurely($filePath);
-        if ($content === null) {
-            $this->cacheResult($cacheKey, []);
-            return [];
-        }
-
-        // Fast pre-screening
-        if (!$this->hasRouteAttributes($content)) {
-            $this->cacheResult($cacheKey, []);
-            return [];
-        }
-
-        $classes = $this->extractClassNames($content);
-        $this->cacheResult($cacheKey, $classes, filemtime($filePath));
-
-        return $classes;
+        return $content !== null && $this->hasRouteAttributes($content);
     }
 
     /**
@@ -117,41 +193,6 @@ final class RouteFileScanner
         }
 
         return true;
-    }
-
-    /**
-     * Generate cache key for file
-     */
-    private function generateCacheKey(string $filePath): string
-    {
-        $stat = stat($filePath);
-        return hash('xxh3', $filePath . ($stat['mtime'] ?? 0) . ($stat['size'] ?? 0));
-    }
-
-    /**
-     * Check if cache entry is still valid
-     */
-    private function isCacheValid(string $filePath, int $cachedTimestamp): bool
-    {
-        $currentTimestamp = filemtime($filePath);
-        return $currentTimestamp !== false && $currentTimestamp === $cachedTimestamp;
-    }
-
-    /**
-     * Cache scan result
-     */
-    private function cacheResult(string $cacheKey, array $classes, ?int $timestamp = null): void
-    {
-        // Limit cache size to prevent memory issues
-        if (count($this->fileCache) >= 1000) {
-            // Remove oldest entries (simple FIFO)
-            $this->fileCache = array_slice($this->fileCache, 100, null, true);
-        }
-
-        $this->fileCache[$cacheKey] = [
-            'classes' => $classes,
-            'timestamp' => $timestamp ?? time(),
-        ];
     }
 
     /**
@@ -215,6 +256,96 @@ final class RouteFileScanner
         return str_contains($content, '#[Route') ||
             str_contains($content, 'Route(') ||
             preg_match($this->compiledPatterns['route_attribute'], $content) === 1;
+    }
+
+    /**
+     * Batch scan multiple files
+     */
+    public function scanFiles(array $filePaths): array
+    {
+        $allClasses = [];
+
+        foreach ($filePaths as $filePath) {
+            $classes = $this->scanFile($filePath);
+            $allClasses = array_merge($allClasses, $classes);
+        }
+
+        return array_unique($allClasses);
+    }
+
+    /**
+     * Scan single file for route classes
+     */
+    public function scanFile(string $filePath): array
+    {
+        $this->totalFiles++;
+
+        if (!$this->isValidPhpFile($filePath)) {
+            return [];
+        }
+
+        $cacheKey = $this->generateCacheKey($filePath);
+
+        // Check cache first
+        if (isset($this->fileCache[$cacheKey])) {
+            $cached = $this->fileCache[$cacheKey];
+            if ($this->isCacheValid($filePath, $cached['timestamp'])) {
+                $this->cacheHits++;
+                return $cached['classes'];
+            }
+        }
+
+        $content = $this->readFileSecurely($filePath);
+        if ($content === null) {
+            $this->cacheResult($cacheKey, []);
+            return [];
+        }
+
+        // Fast pre-screening
+        if (!$this->hasRouteAttributes($content)) {
+            $this->cacheResult($cacheKey, []);
+            return [];
+        }
+
+        $classes = $this->extractClassNames($content);
+        $this->cacheResult($cacheKey, $classes, filemtime($filePath));
+
+        return $classes;
+    }
+
+    /**
+     * Generate cache key for file
+     */
+    private function generateCacheKey(string $filePath): string
+    {
+        $stat = stat($filePath);
+        return hash('xxh3', $filePath . ($stat['mtime'] ?? 0) . ($stat['size'] ?? 0));
+    }
+
+    /**
+     * Check if cache entry is still valid
+     */
+    private function isCacheValid(string $filePath, int $cachedTimestamp): bool
+    {
+        $currentTimestamp = filemtime($filePath);
+        return $currentTimestamp !== false && $currentTimestamp === $cachedTimestamp;
+    }
+
+    /**
+     * Cache scan result
+     */
+    private function cacheResult(string $cacheKey, array $classes, ?int $timestamp = null): void
+    {
+        // Limit cache size to prevent memory issues
+        if (count($this->fileCache) >= 1000) {
+            // Remove oldest entries (simple FIFO)
+            $this->fileCache = array_slice($this->fileCache, 100, null, true);
+        }
+
+        $this->fileCache[$cacheKey] = [
+            'classes' => $classes,
+            'timestamp' => $timestamp ?? time(),
+        ];
     }
 
     /**
@@ -341,136 +472,6 @@ final class RouteFileScanner
         }
 
         return false;
-    }
-
-    /**
-     * Validate discovered class
-     */
-    public function validateClass(string $className): bool
-    {
-        if (!class_exists($className)) {
-            return false;
-        }
-
-        try {
-            $reflection = new \ReflectionClass($className);
-
-            // Must be invokable (have __invoke method)
-            if (!$reflection->hasMethod('__invoke')) {
-                return false;
-            }
-
-            // Security checks
-            if ($this->hasSecurityRisks($reflection)) {
-                return false;
-            }
-
-            return true;
-
-        } catch (\ReflectionException $e) {
-            if ($this->strictMode) {
-                throw $e;
-            }
-            error_log("Reflection error for class {$className}: " . $e->getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Check class for security risks
-     */
-    private function hasSecurityRisks(\ReflectionClass $reflection): bool
-    {
-        // Check for dangerous methods
-        $dangerousMethods = [
-            'exec', 'system', 'shell_exec', 'passthru', 'eval',
-            'file_get_contents', 'file_put_contents', 'fopen'
-        ];
-
-        $methods = $reflection->getMethods(\ReflectionMethod::IS_PUBLIC);
-        foreach ($methods as $method) {
-            if (in_array($method->getName(), $dangerousMethods, true)) {
-                return true;
-            }
-        }
-
-        // Check dangerous interfaces
-        $dangerousInterfaces = ['Serializable'];
-        foreach ($dangerousInterfaces as $interface) {
-            if ($reflection->implementsInterface($interface)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Get scanning statistics
-     */
-    public function getStats(): array
-    {
-        return [
-            'total_files_scanned' => $this->totalFiles,
-            'cache_hits' => $this->cacheHits,
-            'cache_hit_ratio' => $this->cacheHitRatio,
-            'cached_files' => count($this->fileCache),
-            'max_file_size' => $this->maxFileSize,
-            'strict_mode' => $this->strictMode,
-            'memory_usage' => memory_get_usage(true),
-        ];
-    }
-
-    /**
-     * Clear file cache
-     */
-    public function clearCache(): void
-    {
-        $this->fileCache = [];
-        $this->cacheHits = 0;
-        $this->totalFiles = 0;
-    }
-
-    /**
-     * Get cache efficiency metrics
-     */
-    public function getCacheEfficiency(): array
-    {
-        return [
-            'cache_size' => count($this->fileCache),
-            'hit_ratio' => $this->cacheHitRatio,
-            'memory_per_file' => count($this->fileCache) > 0
-                ? memory_get_usage(true) / count($this->fileCache)
-                : 0,
-        ];
-    }
-
-    /**
-     * Check if specific file has route attributes
-     */
-    public function fileHasRoutes(string $filePath): bool
-    {
-        if (!$this->isValidPhpFile($filePath)) {
-            return false;
-        }
-
-        $content = $this->readFileSecurely($filePath);
-        return $content !== null && $this->hasRouteAttributes($content);
-    }
-
-    /**
-     * Batch scan multiple files
-     */
-    public function scanFiles(array $filePaths): array
-    {
-        $allClasses = [];
-
-        foreach ($filePaths as $filePath) {
-            $classes = $this->scanFile($filePath);
-            $allClasses = array_merge($allClasses, $classes);
-        }
-
-        return array_unique($allClasses);
     }
 
     /**

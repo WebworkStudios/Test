@@ -57,7 +57,9 @@ abstract class ServiceProvider
 
     public function __construct(
         protected Container $container
-    ) {}
+    )
+    {
+    }
 
     /**
      * Register services in the container
@@ -79,6 +81,61 @@ abstract class ServiceProvider
     }
 
     /**
+     * Cleanup-Methode für Provider
+     */
+    public function cleanup(): void
+    {
+        // Override in subclasses für Cleanup-Logik
+    }
+
+    /**
+     * Provider-Informationen für Debugging
+     */
+    public function getProviderInfo(): array
+    {
+        return [
+            'class' => static::class,
+            'priority' => $this->getPriority(),
+            'deferred' => $this->isDeferred(),
+            'provides' => $this->provides(),
+            'required_config' => $this->requiredConfig,
+            'required_services' => $this->requiredServices,
+            'should_load' => $this->shouldLoad(),
+            'can_load' => $this->canLoad,
+            'has_valid_requirements' => $this->hasValidRequirements
+        ];
+    }
+
+    /**
+     * Get provider priority (höher = früher geladen)
+     */
+    public function getPriority(): int
+    {
+        return $this->priority;
+    }
+
+    /**
+     * Determine if provider should be deferred
+     */
+    public function isDeferred(): bool
+    {
+        return $this->loadOnDemand;
+    }
+
+    /**
+     * Get services provided by this provider
+     *
+     * Used for deferred loading to determine which
+     * services trigger provider registration.
+     *
+     * @return array<string>
+     */
+    public function provides(): array
+    {
+        return [];
+    }
+
+    /**
      * Prüft ob Provider geladen werden soll mit PHP 8.4 match
      */
     public function shouldLoad(): bool
@@ -87,6 +144,62 @@ abstract class ServiceProvider
             $this->loadOnDemand => false, // Wird später bei Bedarf geladen
             default => true
         };
+    }
+
+    /**
+     * Check if all dependencies are available
+     */
+    public function checkDependencies(): array
+    {
+        $missing = [];
+
+        foreach ($this->requiredServices as $serviceId) {
+            if (!$this->container->isRegistered($serviceId)) {
+                $missing[] = $serviceId;
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'class' => static::class,
+            'priority' => $this->priority,
+            'can_load' => $this->canLoad,
+            'is_deferred' => $this->isDeferred(),
+            'required_config_count' => count($this->requiredConfig),
+            'required_services_count' => count($this->requiredServices),
+            'validation_errors' => $this->validate()
+        ];
+    }
+
+    /**
+     * Validate provider configuration
+     */
+    public function validate(): array
+    {
+        $errors = [];
+
+        // Check required config
+        foreach ($this->requiredConfig as $configKey) {
+            if (!$this->hasConfig($configKey)) {
+                $errors[] = "Missing required config: {$configKey}";
+            }
+        }
+
+        // Check required services
+        foreach ($this->requiredServices as $serviceId) {
+            if (!$this->container->isRegistered($serviceId)) {
+                $errors[] = "Missing required service: {$serviceId}";
+            }
+        }
+
+        return $errors;
     }
 
     /**
@@ -173,32 +286,43 @@ abstract class ServiceProvider
     }
 
     /**
-     * Determine if provider should be deferred
+     * Sichere Instance-Registrierung
      */
-    public function isDeferred(): bool
+    protected function instance(string $id, object $instance): void
     {
-        return $this->loadOnDemand;
+        try {
+            $this->container->instance($id, $instance);
+        } catch (ContainerException $e) {
+            throw ContainerException::configurationError(
+                $id,
+                "Failed to register instance in " . static::class . ": " . $e->getMessage(),
+                ['provider' => static::class]
+            );
+        }
     }
 
     /**
-     * Get services provided by this provider
-     *
-     * Used for deferred loading to determine which
-     * services trigger provider registration.
-     *
-     * @return array<string>
+     * Conditional Service Registration mit vereinfachten Bedingungen
      */
-    public function provides(): array
+    protected function bindIf(string $condition, string $id, mixed $concrete = null, bool $singleton = false): void
     {
-        return [];
+        if ($this->evaluateCondition($condition)) {
+            $this->bind($id, $concrete, $singleton);
+        }
     }
 
     /**
-     * Get provider priority (höher = früher geladen)
+     * Vereinfachte Bedingungsauswertung mit PHP 8.4 match
      */
-    public function getPriority(): int
+    protected function evaluateCondition(string $condition): bool
     {
-        return $this->priority;
+        return match ($condition) {
+            'debug' => $this->getConfig('app.debug', false),
+            'production' => $this->getConfig('app.env') === 'production',
+            'development' => $this->getConfig('app.env') === 'development',
+            'testing' => $this->getConfig('app.env') === 'testing',
+            default => $this->hasConfig($condition)
+        };
     }
 
     /**
@@ -218,42 +342,37 @@ abstract class ServiceProvider
     }
 
     /**
-     * Sichere Singleton-Registrierung
+     * Helper für Factory-Closures mit Error Handling
      */
-    protected function singleton(string $id, mixed $concrete = null): void
+    protected function factory(callable $factory): \Closure
     {
-        $this->bind($id, $concrete, true);
+        return function (Container $container) use ($factory): mixed {
+            try {
+                return $factory($container);
+            } catch (\Throwable $e) {
+                throw ContainerException::cannotResolve(
+                    'factory_service',
+                    "Factory in " . static::class . " failed: " . $e->getMessage(),
+                    ['provider' => static::class]
+                );
+            }
+        };
     }
 
     /**
-     * Sichere Instance-Registrierung
+     * Register multiple tagged services
      */
-    protected function instance(string $id, object $instance): void
+    protected function registerTaggedServices(string $tag, array $services): void
     {
-        try {
-            $this->container->instance($id, $instance);
-        } catch (ContainerException $e) {
-            throw ContainerException::configurationError(
-                $id,
-                "Failed to register instance in " . static::class . ": " . $e->getMessage(),
-                ['provider' => static::class]
-            );
-        }
-    }
+        foreach ($services as $id => $concrete) {
+            if (!is_string($id)) continue;
 
-    /**
-     * Lazy service registration mit PHP 8.4 Features
-     */
-    protected function lazy(string $id, callable $factory, bool $singleton = true): void
-    {
-        try {
-            $this->container->lazy($id, $factory, $singleton);
-        } catch (ContainerException $e) {
-            throw ContainerException::configurationError(
-                $id,
-                "Failed to register lazy service in " . static::class . ": " . $e->getMessage(),
-                ['provider' => static::class]
-            );
+            try {
+                $this->bind($id, $concrete);
+                $this->tag($id, $tag);
+            } catch (\Throwable $e) {
+                error_log("Failed to register tagged service '{$id}' with tag '{$tag}': " . $e->getMessage());
+            }
         }
     }
 
@@ -270,6 +389,31 @@ abstract class ServiceProvider
                 "Failed to tag service in " . static::class . ": " . $e->getMessage(),
                 ['provider' => static::class, 'tag' => $tag]
             );
+        }
+    }
+
+    /**
+     * Contextual binding helper
+     */
+    protected function when(string $context): ContextualBindingBuilder
+    {
+        return $this->container->when($context);
+    }
+
+    /**
+     * Register services with common configuration
+     */
+    protected function registerGroup(array $services, array $commonOptions = []): void
+    {
+        foreach ($services as $id => $concrete) {
+            if (!is_string($id)) continue;
+
+            $options = match (true) {
+                is_array($concrete) => array_merge($commonOptions, $concrete),
+                default => array_merge($commonOptions, ['concrete' => $concrete])
+            };
+
+            $this->registerService($id, $options['concrete'] ?? $id, $options);
         }
     }
 
@@ -303,120 +447,35 @@ abstract class ServiceProvider
     }
 
     /**
-     * Conditional Service Registration mit vereinfachten Bedingungen
+     * Lazy service registration mit PHP 8.4 Features
      */
-    protected function bindIf(string $condition, string $id, mixed $concrete = null, bool $singleton = false): void
+    protected function lazy(string $id, callable $factory, bool $singleton = true): void
     {
-        if ($this->evaluateCondition($condition)) {
-            $this->bind($id, $concrete, $singleton);
+        try {
+            $this->container->lazy($id, $factory, $singleton);
+        } catch (ContainerException $e) {
+            throw ContainerException::configurationError(
+                $id,
+                "Failed to register lazy service in " . static::class . ": " . $e->getMessage(),
+                ['provider' => static::class]
+            );
         }
     }
 
     /**
-     * Vereinfachte Bedingungsauswertung mit PHP 8.4 match
+     * Register conditional services based on environment
      */
-    protected function evaluateCondition(string $condition): bool
+    protected function registerConditional(array $conditions): void
     {
-        return match ($condition) {
-            'debug' => $this->getConfig('app.debug', false),
-            'production' => $this->getConfig('app.env') === 'production',
-            'development' => $this->getConfig('app.env') === 'development',
-            'testing' => $this->getConfig('app.env') === 'testing',
-            default => $this->hasConfig($condition)
-        };
-    }
-
-    /**
-     * Helper für Factory-Closures mit Error Handling
-     */
-    protected function factory(callable $factory): \Closure
-    {
-        return function(Container $container) use ($factory): mixed {
-            try {
-                return $factory($container);
-            } catch (\Throwable $e) {
-                throw ContainerException::cannotResolve(
-                    'factory_service',
-                    "Factory in " . static::class . " failed: " . $e->getMessage(),
-                    ['provider' => static::class]
-                );
-            }
-        };
-    }
-
-    /**
-     * Register multiple tagged services
-     */
-    protected function registerTaggedServices(string $tag, array $services): void
-    {
-        foreach ($services as $id => $concrete) {
-            if (!is_string($id)) continue;
-
-            try {
-                $this->bind($id, $concrete);
-                $this->tag($id, $tag);
-            } catch (\Throwable $e) {
-                error_log("Failed to register tagged service '{$id}' with tag '{$tag}': " . $e->getMessage());
+        foreach ($conditions as $condition => $services) {
+            if ($this->evaluateCondition($condition)) {
+                match (true) {
+                    is_array($services) => $this->registerBatch($services),
+                    is_callable($services) => $services($this),
+                    default => null
+                };
             }
         }
-    }
-
-    /**
-     * Contextual binding helper
-     */
-    protected function when(string $context): ContextualBindingBuilder
-    {
-        return $this->container->when($context);
-    }
-
-    /**
-     * Cleanup-Methode für Provider
-     */
-    public function cleanup(): void
-    {
-        // Override in subclasses für Cleanup-Logik
-    }
-
-    /**
-     * Provider-Informationen für Debugging
-     */
-    public function getProviderInfo(): array
-    {
-        return [
-            'class' => static::class,
-            'priority' => $this->getPriority(),
-            'deferred' => $this->isDeferred(),
-            'provides' => $this->provides(),
-            'required_config' => $this->requiredConfig,
-            'required_services' => $this->requiredServices,
-            'should_load' => $this->shouldLoad(),
-            'can_load' => $this->canLoad,
-            'has_valid_requirements' => $this->hasValidRequirements
-        ];
-    }
-
-    /**
-     * Validate provider configuration
-     */
-    public function validate(): array
-    {
-        $errors = [];
-
-        // Check required config
-        foreach ($this->requiredConfig as $configKey) {
-            if (!$this->hasConfig($configKey)) {
-                $errors[] = "Missing required config: {$configKey}";
-            }
-        }
-
-        // Check required services
-        foreach ($this->requiredServices as $serviceId) {
-            if (!$this->container->isRegistered($serviceId)) {
-                $errors[] = "Missing required service: {$serviceId}";
-            }
-        }
-
-        return $errors;
     }
 
     /**
@@ -442,36 +501,11 @@ abstract class ServiceProvider
     }
 
     /**
-     * Register services with common configuration
+     * Sichere Singleton-Registrierung
      */
-    protected function registerGroup(array $services, array $commonOptions = []): void
+    protected function singleton(string $id, mixed $concrete = null): void
     {
-        foreach ($services as $id => $concrete) {
-            if (!is_string($id)) continue;
-
-            $options = match (true) {
-                is_array($concrete) => array_merge($commonOptions, $concrete),
-                default => array_merge($commonOptions, ['concrete' => $concrete])
-            };
-
-            $this->registerService($id, $options['concrete'] ?? $id, $options);
-        }
-    }
-
-    /**
-     * Register conditional services based on environment
-     */
-    protected function registerConditional(array $conditions): void
-    {
-        foreach ($conditions as $condition => $services) {
-            if ($this->evaluateCondition($condition)) {
-                match (true) {
-                    is_array($services) => $this->registerBatch($services),
-                    is_callable($services) => $services($this),
-                    default => null
-                };
-            }
-        }
+        $this->bind($id, $concrete, true);
     }
 
     /**
@@ -484,37 +518,5 @@ abstract class ServiceProvider
                 $this->bind($alias, $target);
             }
         }
-    }
-
-    /**
-     * Check if all dependencies are available
-     */
-    public function checkDependencies(): array
-    {
-        $missing = [];
-
-        foreach ($this->requiredServices as $serviceId) {
-            if (!$this->container->isRegistered($serviceId)) {
-                $missing[] = $serviceId;
-            }
-        }
-
-        return $missing;
-    }
-
-    /**
-     * Magic method for debugging
-     */
-    public function __debugInfo(): array
-    {
-        return [
-            'class' => static::class,
-            'priority' => $this->priority,
-            'can_load' => $this->canLoad,
-            'is_deferred' => $this->isDeferred(),
-            'required_config_count' => count($this->requiredConfig),
-            'required_services_count' => count($this->requiredServices),
-            'validation_errors' => $this->validate()
-        ];
     }
 }

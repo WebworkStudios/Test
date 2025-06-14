@@ -46,12 +46,66 @@ final class CsrfTokenManager
     }
 
     /**
+     * Clean expired tokens
+     */
+    public function cleanup(): void
+    {
+        $tokens = $this->getAll();
+        $cleaned = false;
+
+        foreach ($tokens as $action => $data) {
+            if ($this->isExpired($data['created_at'])) {
+                unset($tokens[$action]);
+                $cleaned = true;
+            }
+        }
+
+        if ($cleaned) {
+            $this->store($tokens);
+        }
+    }
+
+    /**
+     * Get all tokens
+     */
+    public function getAll(): array
+    {
+        return $this->session->get(self::SESSION_KEY, []);
+    }
+
+    /**
      * Get existing token or null
      */
     public function get(string $action): ?string
     {
         $tokens = $this->getAll();
         return $tokens[$action]['token'] ?? null;
+    }
+
+    /**
+     * Check if timestamp is expired
+     */
+    private function isExpired(int $timestamp): bool
+    {
+        return (time() - $timestamp) > self::TOKEN_LIFETIME;
+    }
+
+    /**
+     * Store tokens in session
+     */
+    private function store(array $tokens): void
+    {
+        $this->session->set(self::SESSION_KEY, $tokens);
+    }
+
+    /**
+     * Limit number of stored tokens
+     */
+    private function limitTokens(array &$tokens): void
+    {
+        if (count($tokens) > self::MAX_TOKENS) {
+            $tokens = array_slice($tokens, -self::MAX_TOKENS, preserve_keys: true);
+        }
     }
 
     /**
@@ -91,16 +145,6 @@ final class CsrfTokenManager
     }
 
     /**
-     * Remove specific token
-     */
-    public function remove(string $action): void
-    {
-        $tokens = $this->getAll();
-        unset($tokens[$action]);
-        $this->store($tokens);
-    }
-
-    /**
      * Clear all tokens
      */
     public function clear(): void
@@ -109,56 +153,12 @@ final class CsrfTokenManager
     }
 
     /**
-     * Get all tokens
+     * Remove specific token
      */
-    public function getAll(): array
-    {
-        return $this->session->get(self::SESSION_KEY, []);
-    }
-
-    /**
-     * Clean expired tokens
-     */
-    public function cleanup(): void
+    public function remove(string $action): void
     {
         $tokens = $this->getAll();
-        $cleaned = false;
-
-        foreach ($tokens as $action => $data) {
-            if ($this->isExpired($data['created_at'])) {
-                unset($tokens[$action]);
-                $cleaned = true;
-            }
-        }
-
-        if ($cleaned) {
-            $this->store($tokens);
-        }
-    }
-
-    /**
-     * Store tokens in session
-     */
-    private function store(array $tokens): void
-    {
-        $this->session->set(self::SESSION_KEY, $tokens);
-    }
-
-    /**
-     * Limit number of stored tokens
-     */
-    private function limitTokens(array &$tokens): void
-    {
-        if (count($tokens) > self::MAX_TOKENS) {
-            $tokens = array_slice($tokens, -self::MAX_TOKENS, preserve_keys: true);
-        }
-    }
-
-    /**
-     * Check if timestamp is expired
-     */
-    private function isExpired(int $timestamp): bool
-    {
-        return (time() - $timestamp) > self::TOKEN_LIFETIME;
+        unset($tokens[$action]);
+        $this->store($tokens);
     }
 }

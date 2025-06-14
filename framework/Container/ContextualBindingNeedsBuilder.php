@@ -13,9 +13,33 @@ final readonly class ContextualBindingNeedsBuilder
 {
     public function __construct(
         private Container $container,
-        private string $context,
-        private string $abstract
-    ) {}
+        private string    $context,
+        private string    $abstract
+    )
+    {
+    }
+
+    /**
+     * Specify a tagged service for the contextual binding
+     */
+    public function giveTagged(string $tag): void
+    {
+        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
+            throw new \InvalidArgumentException("Invalid tag format: {$tag}");
+        }
+
+        $this->give(function (Container $container) use ($tag) {
+            $services = $container->tagged($tag);
+
+            if (empty($services)) {
+                throw ContainerNotFoundException::tagNotFound($tag);
+            }
+
+            return $services[0]; // Return first tagged service
+        });
+    }
+
+// In framework/Container/ContextualBindingNeedsBuilder.php
 
     /**
      * Specify the implementation for the contextual binding
@@ -28,26 +52,20 @@ final readonly class ContextualBindingNeedsBuilder
         $this->container->addContextualBinding($this->context, $this->abstract, $implementation);
     }
 
-// In framework/Container/ContextualBindingNeedsBuilder.php
-
     /**
-     * Specify a tagged service for the contextual binding
+     * Validate implementation
      */
-    public function giveTagged(string $tag): void
+    private function validateImplementation(mixed $implementation): void
     {
-        if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
-            throw new \InvalidArgumentException("Invalid tag format: {$tag}");
-        }
-
-        $this->give(function(Container $container) use ($tag) {
-            $services = $container->tagged($tag);
-
-            if (empty($services)) {
-                throw ContainerNotFoundException::tagNotFound($tag);
-            }
-
-            return $services[0]; // Return first tagged service
-        });
+        match (true) {
+            is_null($implementation) =>
+            throw new \InvalidArgumentException('Implementation cannot be null'),
+            is_string($implementation) && empty($implementation) =>
+            throw new \InvalidArgumentException('Implementation string cannot be empty'),
+            is_string($implementation) && str_contains($implementation, '..') =>
+            throw new \InvalidArgumentException('Implementation cannot contain ".."'),
+            default => null
+        };
     }
 
     /**
@@ -59,7 +77,7 @@ final readonly class ContextualBindingNeedsBuilder
             throw new \InvalidArgumentException("Invalid tag format: {$tag}");
         }
 
-        $this->give(function(Container $container) use ($tag) {
+        $this->give(function (Container $container) use ($tag) {
             $services = $container->tagged($tag);
 
             if (empty($services)) {
@@ -99,7 +117,7 @@ final readonly class ContextualBindingNeedsBuilder
             throw new \InvalidArgumentException("Class does not exist: {$className}");
         }
 
-        $this->give(function(Container $container) use ($className, $config) {
+        $this->give(function (Container $container) use ($className, $config) {
             // Create instance with config
             $reflection = new \ReflectionClass($className);
 
@@ -145,7 +163,7 @@ final readonly class ContextualBindingNeedsBuilder
      */
     public function giveWhen(callable $condition, mixed $implementation): void
     {
-        $this->give(function(Container $container) use ($condition, $implementation) {
+        $this->give(function (Container $container) use ($condition, $implementation) {
             if ($condition($container)) {
                 return match (true) {
                     is_callable($implementation) => $implementation($container),
@@ -163,22 +181,6 @@ final readonly class ContextualBindingNeedsBuilder
                 'Condition not met for contextual binding'
             );
         });
-    }
-
-    /**
-     * Validate implementation
-     */
-    private function validateImplementation(mixed $implementation): void
-    {
-        match (true) {
-            is_null($implementation) =>
-            throw new \InvalidArgumentException('Implementation cannot be null'),
-            is_string($implementation) && empty($implementation) =>
-            throw new \InvalidArgumentException('Implementation string cannot be empty'),
-            is_string($implementation) && str_contains($implementation, '..') =>
-            throw new \InvalidArgumentException('Implementation cannot contain ".."'),
-            default => null
-        };
     }
 
     /**

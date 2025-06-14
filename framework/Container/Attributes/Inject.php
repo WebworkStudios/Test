@@ -52,9 +52,10 @@ final  class Inject
     public function __construct(
         public ?string $id = null,
         public ?string $tag = null,
-        public bool $optional = false,
-        public int $priority = 0
-    ) {
+        public bool    $optional = false,
+        public int     $priority = 0
+    )
+    {
         $this->validateConstruction();
     }
 
@@ -146,83 +147,6 @@ final  class Inject
     }
 
     /**
-     * Validate service ID format (public method)
-     */
-    public function isValidId(): bool
-    {
-        if ($this->id === null) {
-            return true; // No ID is valid if tag is specified
-        }
-
-        return !empty($this->id) &&
-            strlen($this->id) <= 255 &&
-            !str_contains($this->id, '..') &&
-            !str_contains($this->id, '/') &&
-            preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $this->id) === 1;
-    }
-
-    /**
-     * Validate tag format (public method)
-     */
-    public function isValidTag(): bool
-    {
-        if ($this->tag === null) {
-            return true; // No tag is valid if ID is specified
-        }
-
-        return !empty($this->tag) &&
-            strlen($this->tag) <= 100 &&
-            !str_contains($this->tag, '..') &&
-            !str_contains($this->tag, '/') &&
-            preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $this->tag) === 1;
-    }
-
-    /**
-     * Get the injection identifier (ID or tag)
-     */
-    public function getIdentifier(): string
-    {
-        return $this->id ?? $this->tag ?? '';
-    }
-
-    /**
-     * Check if injection should fail silently when not found
-     */
-    public function shouldFailSilently(): bool
-    {
-        return $this->optional;
-    }
-
-    /**
-     * Get injection configuration for container
-     */
-    public function getInjectionConfig(): array
-    {
-        return [
-            'type' => $this->injectionType,
-            'identifier' => $this->getIdentifier(),
-            'optional' => $this->optional,
-            'priority' => $this->priority
-        ];
-    }
-
-    /**
-     * Convert to array for serialization
-     */
-    public function toArray(): array
-    {
-        return [
-            'id' => $this->id,
-            'tag' => $this->tag,
-            'optional' => $this->optional,
-            'priority' => $this->priority,
-            'injection_type' => $this->injectionType,
-            'is_valid' => $this->isValid,
-            'identifier' => $this->getIdentifier()
-        ];
-    }
-
-    /**
      * Create from array (for cache/serialization)
      */
     public static function fromArray(array $data): self
@@ -265,6 +189,83 @@ final  class Inject
     public static function optionalTag(string $tag, int $priority = 0): self
     {
         return new self(tag: $tag, optional: true, priority: $priority);
+    }
+
+    /**
+     * Validate service ID format (public method)
+     */
+    public function isValidId(): bool
+    {
+        if ($this->id === null) {
+            return true; // No ID is valid if tag is specified
+        }
+
+        return !empty($this->id) &&
+            strlen($this->id) <= 255 &&
+            !str_contains($this->id, '..') &&
+            !str_contains($this->id, '/') &&
+            preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $this->id) === 1;
+    }
+
+    /**
+     * Validate tag format (public method)
+     */
+    public function isValidTag(): bool
+    {
+        if ($this->tag === null) {
+            return true; // No tag is valid if ID is specified
+        }
+
+        return !empty($this->tag) &&
+            strlen($this->tag) <= 100 &&
+            !str_contains($this->tag, '..') &&
+            !str_contains($this->tag, '/') &&
+            preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $this->tag) === 1;
+    }
+
+    /**
+     * Check if injection should fail silently when not found
+     */
+    public function shouldFailSilently(): bool
+    {
+        return $this->optional;
+    }
+
+    /**
+     * Get injection configuration for container
+     */
+    public function getInjectionConfig(): array
+    {
+        return [
+            'type' => $this->injectionType,
+            'identifier' => $this->getIdentifier(),
+            'optional' => $this->optional,
+            'priority' => $this->priority
+        ];
+    }
+
+    /**
+     * Get the injection identifier (ID or tag)
+     */
+    public function getIdentifier(): string
+    {
+        return $this->id ?? $this->tag ?? '';
+    }
+
+    /**
+     * Convert to array for serialization
+     */
+    public function toArray(): array
+    {
+        return [
+            'id' => $this->id,
+            'tag' => $this->tag,
+            'optional' => $this->optional,
+            'priority' => $this->priority,
+            'injection_type' => $this->injectionType,
+            'is_valid' => $this->isValid,
+            'identifier' => $this->getIdentifier()
+        ];
     }
 
     /**
@@ -320,6 +321,37 @@ final  class Inject
     }
 
     /**
+     * Check if inject targets a specific service
+     */
+    public function targets(string $identifier): bool
+    {
+        return $this->getIdentifier() === $identifier;
+    }
+
+    /**
+     * Check if inject is compatible with another inject
+     */
+    public function isCompatibleWith(self $other): bool
+    {
+        return $this->injectionType === $other->injectionType &&
+            $this->getIdentifier() === $other->getIdentifier();
+    }
+
+    /**
+     * Get validation errors as formatted string
+     */
+    public function getValidationSummary(): string
+    {
+        $errors = $this->validate();
+
+        if (empty($errors)) {
+            return "Valid injection: {$this->injectionType}={$this->getIdentifier()}";
+        }
+
+        return "Invalid injection: " . implode(', ', $errors);
+    }
+
+    /**
      * Check if injection configuration is valid
      */
     public function validate(): array
@@ -351,37 +383,6 @@ final  class Inject
         }
 
         return $errors;
-    }
-
-    /**
-     * Check if inject targets a specific service
-     */
-    public function targets(string $identifier): bool
-    {
-        return $this->getIdentifier() === $identifier;
-    }
-
-    /**
-     * Check if inject is compatible with another inject
-     */
-    public function isCompatibleWith(self $other): bool
-    {
-        return $this->injectionType === $other->injectionType &&
-            $this->getIdentifier() === $other->getIdentifier();
-    }
-
-    /**
-     * Get validation errors as formatted string
-     */
-    public function getValidationSummary(): string
-    {
-        $errors = $this->validate();
-
-        if (empty($errors)) {
-            return "Valid injection: {$this->injectionType}={$this->getIdentifier()}";
-        }
-
-        return "Invalid injection: " . implode(', ', $errors);
     }
 
     /**

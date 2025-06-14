@@ -56,12 +56,13 @@ final class Config
      * @param callable|null $transform Transform function to apply to the value
      */
     public function __construct(
-        public string $key,
-        public mixed $default = null,
+        public string  $key,
+        public mixed   $default = null,
         public ?string $env = null,
-        public bool $required = false,
-        public mixed $transform = null
-    ) {
+        public bool    $required = false,
+        public mixed   $transform = null
+    )
+    {
         $this->validateConstruction();
     }
 
@@ -141,6 +142,70 @@ final class Config
     }
 
     /**
+     * Create config with type validation
+     */
+    public static function typed(
+        string  $key,
+        string  $type,
+        mixed   $default = null,
+        ?string $env = null
+    ): self
+    {
+        $transform = match ($type) {
+            'string' => fn($v) => (string)$v,
+            'int', 'integer' => fn($v) => (int)$v,
+            'float', 'double' => fn($v) => (float)$v,
+            'bool', 'boolean' => fn($v) => (bool)$v,
+            'array' => fn($v) => is_array($v) ? $v : [$v],
+            default => null
+        };
+
+        return new self($key, $default, $env, transform: $transform);
+    }
+
+    /**
+     * Create required config
+     */
+    public static function required(string $key, ?string $env = null): self
+    {
+        return new self($key, required: true, env: $env);
+    }
+
+    /**
+     * Create config with environment fallback
+     */
+    public static function env(string $envKey, mixed $default = null, ?string $configKey = null): self
+    {
+        return new self(
+            key: $configKey ?? strtolower(str_replace('_', '.', $envKey)),
+            default: $default,
+            env: $envKey
+        );
+    }
+
+    /**
+     * Create config with transform function
+     */
+    public static function transform(string $key, callable $transform, mixed $default = null): self
+    {
+        return new self($key, $default, transform: $transform);
+    }
+
+    /**
+     * Create from array (for cache/serialization)
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            key: $data['key'],
+            default: $data['default'] ?? null,
+            env: $data['env'] ?? null,
+            required: $data['required'] ?? false
+        // Note: transform functions cannot be serialized
+        );
+    }
+
+    /**
      * Get the configuration value with environment variable support
      */
     public function getValue(array $config): mixed
@@ -174,7 +239,7 @@ final class Config
             return null;
         }
 
-        return $this->parseEnvValue((string) $envValue);
+        return $this->parseEnvValue((string)$envValue);
     }
 
     /**
@@ -196,8 +261,8 @@ final class Config
     private function parseNumericOrString(string $value): mixed
     {
         return match (true) {
-            is_numeric($value) && str_contains($value, '.') => (float) $value,
-            is_numeric($value) => (int) $value,
+            is_numeric($value) && str_contains($value, '.') => (float)$value,
+            is_numeric($value) => (int)$value,
             $this->isJsonString($value) => $this->parseJsonValue($value),
             default => $value
         };
@@ -222,6 +287,25 @@ final class Config
             return json_decode($value, true, flags: JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             return $value; // Return as string if JSON parsing fails
+        }
+    }
+
+    /**
+     * Apply transformation function if provided
+     */
+    private function transformValue(mixed $value): mixed
+    {
+        if ($this->transform === null) {
+            return $value;
+        }
+
+        try {
+            return ($this->transform)($value);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                "Transform function failed for config key '{$this->key}': " . $e->getMessage(),
+                previous: $e
+            );
         }
     }
 
@@ -252,25 +336,6 @@ final class Config
         }
 
         return $this->transformValue($this->default);
-    }
-
-    /**
-     * Apply transformation function if provided
-     */
-    private function transformValue(mixed $value): mixed
-    {
-        if ($this->transform === null) {
-            return $value;
-        }
-
-        try {
-            return ($this->transform)($value);
-        } catch (\Throwable $e) {
-            throw new \RuntimeException(
-                "Transform function failed for config key '{$this->key}': " . $e->getMessage(),
-                previous: $e
-            );
-        }
     }
 
     /**
@@ -318,55 +383,6 @@ final class Config
             'null' => is_null($value),
             default => true // Unknown type, allow anything
         };
-    }
-
-    /**
-     * Create config with type validation
-     */
-    public static function typed(
-        string $key,
-        string $type,
-        mixed $default = null,
-        ?string $env = null
-    ): self {
-        $transform = match ($type) {
-            'string' => fn($v) => (string) $v,
-            'int', 'integer' => fn($v) => (int) $v,
-            'float', 'double' => fn($v) => (float) $v,
-            'bool', 'boolean' => fn($v) => (bool) $v,
-            'array' => fn($v) => is_array($v) ? $v : [$v],
-            default => null
-        };
-
-        return new self($key, $default, $env, transform: $transform);
-    }
-
-    /**
-     * Create required config
-     */
-    public static function required(string $key, ?string $env = null): self
-    {
-        return new self($key, required: true, env: $env);
-    }
-
-    /**
-     * Create config with environment fallback
-     */
-    public static function env(string $envKey, mixed $default = null, ?string $configKey = null): self
-    {
-        return new self(
-            key: $configKey ?? strtolower(str_replace('_', '.', $envKey)),
-            default: $default,
-            env: $envKey
-        );
-    }
-
-    /**
-     * Create config with transform function
-     */
-    public static function transform(string $key, callable $transform, mixed $default = null): self
-    {
-        return new self($key, $default, transform: $transform);
     }
 
     /**
@@ -427,33 +443,6 @@ final class Config
     }
 
     /**
-     * Create from array (for cache/serialization)
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            key: $data['key'],
-            default: $data['default'] ?? null,
-            env: $data['env'] ?? null,
-            required: $data['required'] ?? false
-        // Note: transform functions cannot be serialized
-        );
-    }
-
-    /**
-     * Check if configuration is valid
-     */
-    public function isValid(): bool
-    {
-        try {
-            $this->validateConstruction();
-            return true;
-        } catch (\InvalidArgumentException) {
-            return false;
-        }
-    }
-
-    /**
      * Get validation errors
      */
     public function getValidationErrors(): array
@@ -501,6 +490,19 @@ final class Config
             'has_transform' => $this->hasTransform,
             'is_valid' => $this->isValid()
         ];
+    }
+
+    /**
+     * Check if configuration is valid
+     */
+    public function isValid(): bool
+    {
+        try {
+            $this->validateConstruction();
+            return true;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
     }
 
     /**

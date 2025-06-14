@@ -63,9 +63,10 @@ final readonly class Headers
         return new self($normalized);
     }
 
-    public function get(string $name): ?string
+    private static function sanitizeHeaderValue(string $value): string
     {
-        return $this->headers[strtolower($name)] ?? null;
+        // Remove line breaks and control characters
+        return preg_replace('/[\r\n\t]/', '', $value);
     }
 
     public function has(string $name): bool
@@ -87,6 +88,11 @@ final readonly class Headers
         return str_contains($accept, 'application/json');
     }
 
+    public function get(string $name): ?string
+    {
+        return $this->headers[strtolower($name)] ?? null;
+    }
+
     /**
      * Check if request is AJAX
      */
@@ -106,11 +112,5 @@ final readonly class Headers
         }
 
         return array_map('trim', explode(',', $header));
-    }
-
-    private static function sanitizeHeaderValue(string $value): string
-    {
-        // Remove line breaks and control characters
-        return preg_replace('/[\r\n\t]/', '', $value);
     }
 }

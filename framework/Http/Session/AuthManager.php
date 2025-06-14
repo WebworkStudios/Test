@@ -33,11 +33,6 @@ final class AuthManager implements AuthInterface
         $this->session->regenerate();
     }
 
-    public function check(): bool
-    {
-        return isset($_SESSION[self::USER_KEY]['id']);
-    }
-
     public function id(): string|int|null
     {
         return $_SESSION[self::USER_KEY]['id'] ?? null;
@@ -53,5 +48,10 @@ final class AuthManager implements AuthInterface
         if ($this->check()) {
             $_SESSION[self::USER_KEY]['last_activity'] = time();
         }
+    }
+
+    public function check(): bool
+    {
+        return isset($_SESSION[self::USER_KEY]['id']);
     }
 }

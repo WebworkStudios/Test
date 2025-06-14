@@ -65,15 +65,16 @@ final  class Factory
      * @param array<string, mixed> $parameters Default parameters for factory method
      */
     public function __construct(
-        public string $creates,
-        public bool $singleton = true,
-        public array $tags = [],
-        public int $priority = 0,
-        public bool $lazy = false,
+        public string  $creates,
+        public bool    $singleton = true,
+        public array   $tags = [],
+        public int     $priority = 0,
+        public bool    $lazy = false,
         public ?string $condition = null,
-        public string $scope = 'singleton',
-        public array $parameters = []
-    ) {
+        public string  $scope = 'singleton',
+        public array   $parameters = []
+    )
+    {
         $this->validateConstruction();
     }
 
@@ -178,6 +179,23 @@ final  class Factory
                 default => null
             };
         }
+    }
+
+    /**
+     * Create from array (for cache/serialization)
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            creates: $data['creates'],
+            singleton: $data['singleton'] ?? true,
+            tags: $data['tags'] ?? [],
+            priority: $data['priority'] ?? 0,
+            lazy: $data['lazy'] ?? false,
+            condition: $data['condition'] ?? null,
+            scope: $data['scope'] ?? 'singleton',
+            parameters: $data['parameters'] ?? []
+        );
     }
 
     /**
@@ -332,23 +350,6 @@ final  class Factory
     }
 
     /**
-     * Create from array (for cache/serialization)
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            creates: $data['creates'],
-            singleton: $data['singleton'] ?? true,
-            tags: $data['tags'] ?? [],
-            priority: $data['priority'] ?? 0,
-            lazy: $data['lazy'] ?? false,
-            condition: $data['condition'] ?? null,
-            scope: $data['scope'] ?? 'singleton',
-            parameters: $data['parameters'] ?? []
-        );
-    }
-
-    /**
      * Clone factory with different creates
      */
     public function withCreates(string $creates): self
@@ -397,19 +398,6 @@ final  class Factory
             $this->scope,
             $this->parameters
         );
-    }
-
-    /**
-     * Check if factory configuration is valid
-     */
-    public function isValid(): bool
-    {
-        try {
-            $this->validateConstruction();
-            return true;
-        } catch (\InvalidArgumentException) {
-            return false;
-        }
     }
 
     /**
@@ -468,6 +456,19 @@ final  class Factory
             'priority' => $this->priority,
             'is_valid' => $this->isValid()
         ];
+    }
+
+    /**
+     * Check if factory configuration is valid
+     */
+    public function isValid(): bool
+    {
+        try {
+            $this->validateConstruction();
+            return true;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
     }
 
     /**

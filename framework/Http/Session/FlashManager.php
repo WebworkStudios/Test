@@ -8,7 +8,9 @@ final class FlashManager implements FlashInterface
 {
     private const string FLASH_KEY = '_framework_flash';
 
-    public function __construct() {}
+    public function __construct()
+    {
+    }
 
     public function set(string $key, mixed $value): void
     {

@@ -56,14 +56,15 @@ final class Service
      */
     public function __construct(
         public ?string $id = null,
-        public bool $singleton = true,
-        public array $tags = [],
-        public int $priority = 0,
-        public bool $lazy = false,
+        public bool    $singleton = true,
+        public array   $tags = [],
+        public int     $priority = 0,
+        public bool    $lazy = false,
         public ?string $condition = null,
-        public string $scope = 'singleton',
-        public array $interfaces = []
-    ) {
+        public string  $scope = 'singleton',
+        public array   $interfaces = []
+    )
+    {
         $this->validateConstruction();
     }
 
@@ -172,6 +173,23 @@ final class Service
             throw new \InvalidArgumentException('Priority too high (max 1000)'),
             default => null
         };
+    }
+
+    /**
+     * Create from array (for cache/serialization)
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            id: $data['id'] ?? null,
+            singleton: $data['singleton'] ?? true,
+            tags: $data['tags'] ?? [],
+            priority: $data['priority'] ?? 0,
+            lazy: $data['lazy'] ?? false,
+            condition: $data['condition'] ?? null,
+            scope: $data['scope'] ?? 'singleton',
+            interfaces: $data['interfaces'] ?? []
+        );
     }
 
     /**
@@ -305,23 +323,6 @@ final class Service
     }
 
     /**
-     * Create from array (for cache/serialization)
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            id: $data['id'] ?? null,
-            singleton: $data['singleton'] ?? true,
-            tags: $data['tags'] ?? [],
-            priority: $data['priority'] ?? 0,
-            lazy: $data['lazy'] ?? false,
-            condition: $data['condition'] ?? null,
-            scope: $data['scope'] ?? 'singleton',
-            interfaces: $data['interfaces'] ?? []
-        );
-    }
-
-    /**
      * Clone service with different options
      */
     public function withId(?string $id): self
@@ -390,19 +391,6 @@ final class Service
     }
 
     /**
-     * Check if service configuration is valid
-     */
-    public function isValid(): bool
-    {
-        try {
-            $this->validateConstruction();
-            return true;
-        } catch (\InvalidArgumentException) {
-            return false;
-        }
-    }
-
-    /**
      * Get validation errors
      */
     public function getValidationErrors(): array
@@ -458,6 +446,19 @@ final class Service
             'priority' => $this->priority,
             'is_valid' => $this->isValid()
         ];
+    }
+
+    /**
+     * Check if service configuration is valid
+     */
+    public function isValid(): bool
+    {
+        try {
+            $this->validateConstruction();
+            return true;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
     }
 
     /**

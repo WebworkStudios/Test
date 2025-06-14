@@ -19,31 +19,6 @@ final readonly class CacheHeaders
     }
 
     /**
-     * Check if request has If-None-Match header (ETag validation)
-     */
-    public function getIfNoneMatch(): ?string
-    {
-        return $this->headers->get('if-none-match');
-    }
-
-    /**
-     * Check if request has If-Modified-Since header
-     */
-    public function getIfModifiedSince(): ?\DateTimeImmutable
-    {
-        $header = $this->headers->get('if-modified-since');
-        if (!$header) {
-            return null;
-        }
-
-        try {
-            return new \DateTimeImmutable($header);
-        } catch (\DateMalformedStringException) {
-            return null;
-        }
-    }
-
-    /**
      * Generate cache headers for response
      */
     public static function forResponse(
@@ -100,5 +75,30 @@ final readonly class CacheHeaders
         }
 
         return false;
+    }
+
+    /**
+     * Check if request has If-None-Match header (ETag validation)
+     */
+    public function getIfNoneMatch(): ?string
+    {
+        return $this->headers->get('if-none-match');
+    }
+
+    /**
+     * Check if request has If-Modified-Since header
+     */
+    public function getIfModifiedSince(): ?\DateTimeImmutable
+    {
+        $header = $this->headers->get('if-modified-since');
+        if (!$header) {
+            return null;
+        }
+
+        try {
+            return new \DateTimeImmutable($header);
+        } catch (\DateMalformedStringException) {
+            return null;
+        }
     }
 }

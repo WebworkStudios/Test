@@ -35,15 +35,16 @@ final class Route
      * @param array<string> $methods Additional HTTP methods for multi-method routes
      */
     public function __construct(
-        public string $method,
-        public string $path,
-        public array $middleware = [],
+        public string  $method,
+        public string  $path,
+        public array   $middleware = [],
         public ?string $name = null,
         public ?string $subdomain = null,
-        public array $options = [],
-        public array $schemes = ['http', 'https'],
-        public array $methods = []
-    ) {
+        public array   $options = [],
+        public array   $schemes = ['http', 'https'],
+        public array   $methods = []
+    )
+    {
         $this->validateAndNormalize();
     }
 
@@ -258,33 +259,12 @@ final class Route
     }
 
     /**
-     * Validate allowed schemes
+     * Validate boolean or int option
      */
-    private function validateSchemes(array $schemes): void
+    private function validateBooleanOrIntOption(mixed $value, string $optionName): void
     {
-        $allowedSchemes = ['http', 'https'];
-
-        if (empty($schemes)) {
-            throw new \InvalidArgumentException('At least one scheme must be specified');
-        }
-
-        foreach ($schemes as $scheme) {
-            if (!is_string($scheme) || !in_array(strtolower($scheme), $allowedSchemes, true)) {
-                throw new \InvalidArgumentException("Invalid scheme: {$scheme}");
-            }
-        }
-    }
-
-    /**
-     * Validate additional methods
-     */
-    private function validateMethods(array $methods): void
-    {
-        foreach ($methods as $method) {
-            if (!is_string($method)) {
-                throw new \InvalidArgumentException('Methods must be strings');
-            }
-            $this->validateMethod($method);
+        if (!is_bool($value) && !is_int($value)) {
+            throw new \InvalidArgumentException("{$optionName} option must be boolean or integer");
         }
     }
 
@@ -319,13 +299,51 @@ final class Route
     }
 
     /**
-     * Validate boolean or int option
+     * Validate allowed schemes
      */
-    private function validateBooleanOrIntOption(mixed $value, string $optionName): void
+    private function validateSchemes(array $schemes): void
     {
-        if (!is_bool($value) && !is_int($value)) {
-            throw new \InvalidArgumentException("{$optionName} option must be boolean or integer");
+        $allowedSchemes = ['http', 'https'];
+
+        if (empty($schemes)) {
+            throw new \InvalidArgumentException('At least one scheme must be specified');
         }
+
+        foreach ($schemes as $scheme) {
+            if (!is_string($scheme) || !in_array(strtolower($scheme), $allowedSchemes, true)) {
+                throw new \InvalidArgumentException("Invalid scheme: {$scheme}");
+            }
+        }
+    }
+
+    /**
+     * Validate additional methods
+     */
+    private function validateMethods(array $methods): void
+    {
+        foreach ($methods as $method) {
+            if (!is_string($method)) {
+                throw new \InvalidArgumentException('Methods must be strings');
+            }
+            $this->validateMethod($method);
+        }
+    }
+
+    /**
+     * Create from array
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            $data['method'],
+            $data['path'],
+            $data['middleware'] ?? [],
+            $data['name'] ?? null,
+            $data['subdomain'] ?? null,
+            $data['options'] ?? [],
+            $data['schemes'] ?? ['http', 'https'],
+            $data['methods'] ?? []
+        );
     }
 
     /**
@@ -334,31 +352,6 @@ final class Route
     public function supportsMethod(string $method): bool
     {
         return in_array(strtoupper($method), $this->allMethods, true);
-    }
-
-    /**
-     * Check if route requires HTTPS
-     */
-    public function requiresHttps(): bool
-    {
-        return !in_array('http', $this->schemes, true) ||
-            ($this->options['ssl_required'] ?? false) === true;
-    }
-
-    /**
-     * Get route priority (higher number = higher priority)
-     */
-    public function getPriority(): int
-    {
-        return $this->options['priority'] ?? 50;
-    }
-
-    /**
-     * Check if route is deprecated
-     */
-    public function isDeprecated(): bool
-    {
-        return ($this->options['deprecated'] ?? false) === true;
     }
 
     /**
@@ -387,23 +380,6 @@ final class Route
     }
 
     /**
-     * Create from array
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            $data['method'],
-            $data['path'],
-            $data['middleware'] ?? [],
-            $data['name'] ?? null,
-            $data['subdomain'] ?? null,
-            $data['options'] ?? [],
-            $data['schemes'] ?? ['http', 'https'],
-            $data['methods'] ?? []
-        );
-    }
-
-    /**
      * Magic method for debugging
      */
     public function __debugInfo(): array
@@ -420,5 +396,30 @@ final class Route
             'priority' => $this->getPriority(),
             'is_deprecated' => $this->isDeprecated(),
         ];
+    }
+
+    /**
+     * Check if route requires HTTPS
+     */
+    public function requiresHttps(): bool
+    {
+        return !in_array('http', $this->schemes, true) ||
+            ($this->options['ssl_required'] ?? false) === true;
+    }
+
+    /**
+     * Get route priority (higher number = higher priority)
+     */
+    public function getPriority(): int
+    {
+        return $this->options['priority'] ?? 50;
+    }
+
+    /**
+     * Check if route is deprecated
+     */
+    public function isDeprecated(): bool
+    {
+        return ($this->options['deprecated'] ?? false) === true;
     }
 }

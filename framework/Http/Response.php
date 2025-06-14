@@ -32,22 +32,20 @@ final class Response
     public const int STATUS_NOT_IMPLEMENTED = 501;
     public const int STATUS_BAD_GATEWAY = 502;
     public const int STATUS_SERVICE_UNAVAILABLE = 503;
-
-    private array $cookies = [];
-
-    // Property Hooks for better API
     public private(set) string $body {
         set(string $value) {
             $this->body = $value;
         }
     }
 
+    // Property Hooks for better API
     public private(set) int $status {
         set(int $value) {
             $this->validateStatus($value);
             $this->status = $value;
         }
     }
+    private array $cookies = [];
 
     /**
      * @param string $body Response body
@@ -55,34 +53,25 @@ final class Response
      * @param Headers $headers HTTP headers
      */
     public function __construct(
-        string $body = '',
-        int $status = self::STATUS_OK,
+        string          $body = '',
+        int             $status = self::STATUS_OK,
         private Headers $headers = new Headers()
-    ) {
+    )
+    {
         $this->validateStatus($status);
         $this->body = $body;
         $this->status = $status;
     }
 
     /**
-     * Create JSON response with flexible data types and size limit
+     * Validate HTTP status code using match expression
      */
-    public static function json(array|object|string $data, int $status = self::STATUS_OK, int $maxSize = 1048576): self
+    private function validateStatus(int $status): void
     {
-        $jsonData = match(true) {
-            is_string($data) => $data,
-            default => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)
+        match (true) {
+            $status >= 100 && $status < 600 => null,
+            default => throw new InvalidArgumentException("Invalid HTTP status code: {$status}")
         };
-
-        if (strlen($jsonData) > $maxSize) {
-            throw new InvalidArgumentException("JSON response too large: " . strlen($jsonData) . " bytes (max: {$maxSize})");
-        }
-
-        return new self(
-            $jsonData,
-            $status,
-            Headers::fromArray(['Content-Type' => 'application/json; charset=utf-8'])
-        );
     }
 
     /**
@@ -114,10 +103,31 @@ final class Response
      */
     public static function created(array|object|string|null $data = null): self
     {
-        return match($data) {
+        return match ($data) {
             null => new self('', self::STATUS_CREATED),
             default => self::json($data, self::STATUS_CREATED)
         };
+    }
+
+    /**
+     * Create JSON response with flexible data types and size limit
+     */
+    public static function json(array|object|string $data, int $status = self::STATUS_OK, int $maxSize = 1048576): self
+    {
+        $jsonData = match (true) {
+            is_string($data) => $data,
+            default => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)
+        };
+
+        if (strlen($jsonData) > $maxSize) {
+            throw new InvalidArgumentException("JSON response too large: " . strlen($jsonData) . " bytes (max: {$maxSize})");
+        }
+
+        return new self(
+            $jsonData,
+            $status,
+            Headers::fromArray(['Content-Type' => 'application/json; charset=utf-8'])
+        );
     }
 
     /**
@@ -212,13 +222,14 @@ final class Response
      * Create cached response with ETag and Last-Modified headers
      */
     public static function cached(
-        string $content,
-        string $etag,
+        string             $content,
+        string             $etag,
         \DateTimeImmutable $lastModified,
-        int $maxAge = 3600,
-        bool $public = true,
-        string $contentType = 'text/html; charset=utf-8'
-    ): self {
+        int                $maxAge = 3600,
+        bool               $public = true,
+        string             $contentType = 'text/html; charset=utf-8'
+    ): self
+    {
         $cacheHeaders = CacheHeaders::forResponse($etag, $lastModified, $maxAge, $public);
         $cacheHeaders['Content-Type'] = $contentType;
 
@@ -227,34 +238,6 @@ final class Response
             self::STATUS_OK,
             Headers::fromArray($cacheHeaders)
         );
-    }
-
-    /**
-     * Set response header with fluent interface
-     */
-    public function withHeader(string $name, string $value): self
-    {
-        $newHeaders = Headers::fromArray(
-            [...$this->headers->all(), strtolower($name) => $value]
-        );
-
-        $response = new self($this->body, $this->status, $newHeaders);
-        $response->cookies = $this->cookies;
-        return $response;
-    }
-
-    /**
-     * Set multiple headers at once
-     */
-    public function withHeaders(array $headers): self
-    {
-        $newHeaders = Headers::fromArray(
-            [...$this->headers->all(), ...array_change_key_case($headers, CASE_LOWER)]
-        );
-
-        $response = new self($this->body, $this->status, $newHeaders);
-        $response->cookies = $this->cookies;
-        return $response;
     }
 
     /**
@@ -278,16 +261,6 @@ final class Response
     }
 
     /**
-     * Add cookie to response
-     */
-    public function withCookie(Cookie $cookie): self
-    {
-        $response = new self($this->body, $this->status, $this->headers);
-        $response->cookies = [...$this->cookies, $cookie];
-        return $response;
-    }
-
-    /**
      * Add multiple cookies to response
      */
     public function withCookies(array $cookies): self
@@ -306,11 +279,35 @@ final class Response
     }
 
     /**
+     * Add cookie to response
+     */
+    public function withCookie(Cookie $cookie): self
+    {
+        $response = new self($this->body, $this->status, $this->headers);
+        $response->cookies = [...$this->cookies, $cookie];
+        return $response;
+    }
+
+    /**
      * Set Cache-Control header
      */
     public function withCacheControl(string $cacheControl): self
     {
         return $this->withHeader('Cache-Control', $cacheControl);
+    }
+
+    /**
+     * Set response header with fluent interface
+     */
+    public function withHeader(string $name, string $value): self
+    {
+        $newHeaders = Headers::fromArray(
+            [...$this->headers->all(), strtolower($name) => $value]
+        );
+
+        $response = new self($this->body, $this->status, $newHeaders);
+        $response->cookies = $this->cookies;
+        return $response;
     }
 
     /**
@@ -350,19 +347,34 @@ final class Response
     }
 
     /**
+     * Set multiple headers at once
+     */
+    public function withHeaders(array $headers): self
+    {
+        $newHeaders = Headers::fromArray(
+            [...$this->headers->all(), ...array_change_key_case($headers, CASE_LOWER)]
+        );
+
+        $response = new self($this->body, $this->status, $newHeaders);
+        $response->cookies = $this->cookies;
+        return $response;
+    }
+
+    /**
      * Set CORS headers
      */
     public function withCors(
         string $origin = '*',
-        array $methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-        array $headers = ['Content-Type', 'Authorization'],
-        int $maxAge = 86400
-    ): self {
+        array  $methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        array  $headers = ['Content-Type', 'Authorization'],
+        int    $maxAge = 86400
+    ): self
+    {
         return $this->withHeaders([
             'Access-Control-Allow-Origin' => $origin,
             'Access-Control-Allow-Methods' => implode(', ', $methods),
             'Access-Control-Allow-Headers' => implode(', ', $headers),
-            'Access-Control-Max-Age' => (string) $maxAge
+            'Access-Control-Max-Age' => (string)$maxAge
         ]);
     }
 
@@ -462,14 +474,6 @@ final class Response
     }
 
     /**
-     * Get content type
-     */
-    public function getContentType(): string
-    {
-        return $this->headers->get('content-type') ?? 'text/html';
-    }
-
-    /**
      * Get cookies
      */
     public function getCookies(): array
@@ -486,6 +490,14 @@ final class Response
     }
 
     /**
+     * Get content type
+     */
+    public function getContentType(): string
+    {
+        return $this->headers->get('content-type') ?? 'text/html';
+    }
+
+    /**
      * Convert response to array (useful for testing/debugging)
      */
     public function toArray(): array
@@ -496,16 +508,5 @@ final class Response
             'cookies' => array_map(fn($cookie) => $cookie->toHeaderValue(), $this->cookies),
             'body' => $this->body
         ];
-    }
-
-    /**
-     * Validate HTTP status code using match expression
-     */
-    private function validateStatus(int $status): void
-    {
-        match(true) {
-            $status >= 100 && $status < 600 => null,
-            default => throw new InvalidArgumentException("Invalid HTTP status code: {$status}")
-        };
     }
 }

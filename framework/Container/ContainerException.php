@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Framework\Container\Psr\ContainerExceptionInterface;
+use Framework\Container\Psr\NotFoundExceptionInterface;
+
 /**
  * Framework Container Exception mit PHP 8.4 Features
  *
  * Vereinfachte Exception-Klasse mit besserer Fehlerdiagnose
  * und optimierter Performance.
  */
-class ContainerException extends \Exception
+class ContainerException extends \Exception implements ContainerExceptionInterface
 {
     // Property Hooks für computed properties
     public bool $hasContext {
@@ -39,12 +42,13 @@ class ContainerException extends \Exception
     private ?string $serviceId = null;
 
     public function __construct(
-        string $message = '',
-        int $code = 0,
+        string      $message = '',
+        int         $code = 0,
         ?\Throwable $previous = null,
-        array $context = [],
-        ?string $serviceId = null
-    ) {
+        array       $context = [],
+        ?string     $serviceId = null
+    )
+    {
         parent::__construct($message, $code, $previous);
         $this->context = $this->sanitizeContext($context);
         $this->serviceId = $serviceId;
@@ -107,26 +111,6 @@ class ContainerException extends \Exception
     }
 
     /**
-     * Extract short message for logging
-     */
-    private function extractShortMessage(): string
-    {
-        $message = $this->getMessage();
-        $firstLine = strtok($message, "\n");
-        return strlen($firstLine) > 100 ? substr($firstLine, 0, 97) . '...' : $firstLine;
-    }
-
-    public function getContext(): array
-    {
-        return $this->context;
-    }
-
-    public function getServiceId(): ?string
-    {
-        return $this->serviceId;
-    }
-
-    /**
      * Create exception for resolution failures
      */
     public static function cannotResolve(string $service, string $reason = '', array $context = []): self
@@ -139,6 +123,15 @@ class ContainerException extends \Exception
         }
 
         return new self($message, 1001, null, $context, $safeService);
+    }
+
+    /**
+     * Sanitize service name for safe output
+     */
+    protected static function sanitizeServiceName(string $service): string
+    {
+        $sanitized = preg_replace('/[^\w\\\\.]/s', '', $service);
+        return strlen($sanitized) > 100 ? substr($sanitized, 0, 97) . '...' : $sanitized;
     }
 
     /**
@@ -212,21 +205,22 @@ class ContainerException extends \Exception
     }
 
     /**
-     * Sanitize service name for safe output
-     */
-    protected static function sanitizeServiceName(string $service): string
-    {
-        $sanitized = preg_replace('/[^\w\\\\.]/s', '', $service);
-        return strlen($sanitized) > 100 ? substr($sanitized, 0, 97) . '...' : $sanitized;
-    }
-
-    /**
      * Sanitize config key for safe output
      */
     private static function sanitizeConfigKey(string $key): string
     {
         $sanitized = preg_replace('/[^\w.]/', '', $key);
         return strlen($sanitized) > 100 ? substr($sanitized, 0, 97) . '...' : $sanitized;
+    }
+
+    public function getContext(): array
+    {
+        return $this->context;
+    }
+
+    public function getServiceId(): ?string
+    {
+        return $this->serviceId;
     }
 
     /**
@@ -337,6 +331,16 @@ class ContainerException extends \Exception
 
         return $result;
     }
+
+    /**
+     * Extract short message for logging
+     */
+    private function extractShortMessage(): string
+    {
+        $message = $this->getMessage();
+        $firstLine = strtok($message, "\n");
+        return strlen($firstLine) > 100 ? substr($firstLine, 0, 97) . '...' : $firstLine;
+    }
 }
 
 /**
@@ -344,7 +348,7 @@ class ContainerException extends \Exception
  *
  * Vereinfachte NotFound-Exception mit Service-Vorschlägen
  */
-class ContainerNotFoundException extends ContainerException
+class ContainerNotFoundException extends ContainerException implements NotFoundExceptionInterface
 {
     // Property Hooks für computed properties
     public bool $hasSuggestions {
@@ -373,25 +377,6 @@ class ContainerNotFoundException extends ContainerException
         );
 
         $exception->suggestions = $exception->findSimilarServices($safeService, $availableServices);
-
-        return $exception;
-    }
-
-    /**
-     * Create exception for missing tagged services
-     */
-    public static function tagNotFound(string $tag, array $availableTags = []): self
-    {
-        $safeTag = preg_replace('/[^\w.]/', '', $tag);
-
-        $exception = new self(
-            "No services found with tag '{$safeTag}'",
-            2002,
-            null,
-            ['available_tags' => array_slice($availableTags, 0, 10)]
-        );
-
-        $exception->suggestions = $exception->findSimilarServices($safeTag, $availableTags);
 
         return $exception;
     }
@@ -459,9 +444,40 @@ class ContainerNotFoundException extends ContainerException
         return $similarity / 100;
     }
 
+    /**
+     * Create exception for missing tagged services
+     */
+    public static function tagNotFound(string $tag, array $availableTags = []): self
+    {
+        $safeTag = preg_replace('/[^\w.]/', '', $tag);
+
+        $exception = new self(
+            "No services found with tag '{$safeTag}'",
+            2002,
+            null,
+            ['available_tags' => array_slice($availableTags, 0, 10)]
+        );
+
+        $exception->suggestions = $exception->findSimilarServices($safeTag, $availableTags);
+
+        return $exception;
+    }
+
     public function getSuggestions(): array
     {
         return $this->suggestions;
+    }
+
+    public function __toString(): string
+    {
+        $result = $this->getMessageWithSuggestions();
+        $result .= "\n\nStack trace:\n" . $this->getTraceAsString();
+
+        if ($this->hasContext) {
+            $result .= "\n\nContext: " . json_encode($this->getContext(), JSON_PRETTY_PRINT);
+        }
+
+        return $result;
     }
 
     /**
@@ -479,17 +495,5 @@ class ContainerNotFoundException extends ContainerException
         }
 
         return $message;
-    }
-
-    public function __toString(): string
-    {
-        $result = $this->getMessageWithSuggestions();
-        $result .= "\n\nStack trace:\n" . $this->getTraceAsString();
-
-        if ($this->hasContext) {
-            $result .= "\n\nContext: " . json_encode($this->getContext(), JSON_PRETTY_PRINT);
-        }
-
-        return $result;
     }
 }

@@ -29,6 +29,18 @@ final readonly class CsrfHtmlGenerator
     }
 
     /**
+     * Get existing token or create new one
+     */
+    private function getOrCreateToken(string $action): string
+    {
+        if ($this->tokenManager->exists($action)) {
+            return $this->tokenManager->get($action);
+        }
+
+        return $this->tokenManager->generate($action);
+    }
+
+    /**
      * Generate meta tag for AJAX requests (optional - nur bei Bedarf)
      */
     public function metaTag(string $action = 'default'): string
@@ -48,17 +60,5 @@ final readonly class CsrfHtmlGenerator
         $escapedToken = htmlspecialchars($token, ENT_QUOTES, 'UTF-8');
 
         return "data-csrf-token=\"{$escapedToken}\"";
-    }
-
-    /**
-     * Get existing token or create new one
-     */
-    private function getOrCreateToken(string $action): string
-    {
-        if ($this->tokenManager->exists($action)) {
-            return $this->tokenManager->get($action);
-        }
-
-        return $this->tokenManager->generate($action);
     }
 }

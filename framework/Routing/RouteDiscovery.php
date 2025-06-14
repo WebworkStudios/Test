@@ -5,11 +5,10 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use Framework\Routing\Attributes\Route;
-use Framework\Routing\RouteFileScanner;
-use ReflectionClass;
+use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use RecursiveCallbackFilterIterator;
+use ReflectionClass;
 
 /**
  * Optimized route discovery with PHP 8.4 features
@@ -36,15 +35,33 @@ final class RouteDiscovery
     private array $classCache = [];
 
     public function __construct(
-        private readonly Router $router,
+        private readonly Router           $router,
         private readonly RouteFileScanner $scanner,
-        private readonly array $ignoredDirectories = [
+        private readonly array            $ignoredDirectories = [
             'vendor', 'node_modules', '.git', 'storage', 'cache', 'tests',
             'build', 'dist', 'coverage', '.idea', '.vscode', 'tmp', 'temp'
         ],
-        private readonly array $config = []
-    ) {
+        private readonly array            $config = []
+    )
+    {
         $this->validateConfiguration();
+    }
+
+    /**
+     * Validate configuration
+     */
+    private function validateConfiguration(): void
+    {
+        if ($this->maxDepth < 1 || $this->maxDepth > 20) {
+            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
+        }
+
+        // Validate ignored directories
+        foreach ($this->ignoredDirectories as $dir) {
+            if (!is_string($dir) || strlen($dir) > 100) {
+                throw new \InvalidArgumentException('Invalid ignored directory specification');
+            }
+        }
     }
 
     /**
@@ -57,6 +74,84 @@ final class RouteDiscovery
     }
 
     /**
+     * Check if class has route attributes
+     */
+    public function hasRouteAttributes(string $className): bool
+    {
+        if (!class_exists($className)) {
+            return false;
+        }
+
+        try {
+            $reflection = new ReflectionClass($className);
+            return !empty($reflection->getAttributes(Route::class));
+        } catch (\ReflectionException) {
+            return false;
+        }
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCache(): void
+    {
+        $this->classCache = [];
+        $this->scanner->clearCache();
+        $this->resetCounters();
+    }
+
+    /**
+     * Reset performance counters
+     */
+    private function resetCounters(): void
+    {
+        $this->processedFiles = 0;
+        $this->discoveredRoutes = 0;
+    }
+
+    /**
+     * Get cache efficiency metrics
+     */
+    public function getCacheEfficiency(): array
+    {
+        $scannerEfficiency = $this->scanner->getCacheEfficiency();
+
+        return [
+            'class_cache_size' => count($this->classCache),
+            'class_success_rate' => count($this->classCache) > 0
+                ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
+                : 0,
+            'scanner_efficiency' => $scannerEfficiency,
+            'memory_per_class' => count($this->classCache) > 0
+                ? memory_get_usage(true) / count($this->classCache)
+                : 0,
+        ];
+    }
+
+    /**
+     * Auto-discover with default paths
+     */
+    public function autoDiscover(): void
+    {
+        $defaultPaths = [
+            'app/Actions',
+            'app/Controllers',
+            'app/Http/Actions',
+            'app/Http/Controllers',
+            'src/Actions',
+            'src/Controllers'
+        ];
+
+        $existingPaths = array_filter($defaultPaths, 'is_dir');
+
+        if (empty($existingPaths)) {
+            throw new \RuntimeException('No default discovery paths found');
+        }
+
+        $this->discover($existingPaths);
+    }
+
+    /**
      * Discover routes in specified directories
      */
     public function discover(array $directories): void
@@ -66,6 +161,34 @@ final class RouteDiscovery
 
         foreach ($directories as $directory) {
             $this->scanDirectory($directory);
+        }
+    }
+
+    /**
+     * Validate directories input
+     */
+    private function validateDirectories(array $directories): void
+    {
+        if (empty($directories)) {
+            throw new \InvalidArgumentException('At least one directory must be specified');
+        }
+
+        if (count($directories) > 20) {
+            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
+        }
+
+        foreach ($directories as $directory) {
+            if (!is_string($directory)) {
+                throw new \InvalidArgumentException('Directory must be a string');
+            }
+
+            if (strlen($directory) > 500) {
+                throw new \InvalidArgumentException('Directory path too long');
+            }
+
+            if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
+                throw new \InvalidArgumentException('Directory path contains invalid characters');
+            }
         }
     }
 
@@ -102,6 +225,45 @@ final class RouteDiscovery
             }
             error_log("Error scanning directory {$directory}: " . $e->getMessage());
         }
+    }
+
+    /**
+     * Process glob pattern
+     */
+    private function processGlobPattern(string $pattern): void
+    {
+        $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
+        if ($matches === false) {
+            return;
+        }
+
+        // Limit number of directories
+        $matches = array_slice($matches, 0, 50);
+
+        foreach ($matches as $match) {
+            $this->scanDirectory($match);
+        }
+    }
+
+    /**
+     * Check if path is secure
+     */
+    private function isSecurePath(string $path): bool
+    {
+        // Basic security check
+        if (str_contains($path, '..') || str_contains($path, "\0")) {
+            return false;
+        }
+
+        // Check if path is within allowed boundaries (if strict mode)
+        if ($this->strictMode) {
+            $cwd = realpath(getcwd());
+            if ($cwd === false || !str_starts_with($path, $cwd)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -155,69 +317,6 @@ final class RouteDiscovery
         }
 
         $this->processedFiles += count($filePaths);
-    }
-
-    /**
-     * Create file filter for iterator
-     */
-    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
-    {
-        $filename = $file->getFilename();
-
-        // Fast exclusion checks
-        if (str_starts_with($filename, '.') ||
-            str_starts_with($filename, '_') ||
-            str_starts_with($filename, '#')) {
-            return false;
-        }
-
-        if ($file->isDir()) {
-            return $this->isAllowedDirectory($filename);
-        }
-
-        // File validation - delegate to scanner
-        return $file->getExtension() === 'php' &&
-            $file->isReadable() &&
-            $file->getSize() > 0;
-    }
-
-    /**
-     * Check if directory is allowed
-     */
-    private function isAllowedDirectory(string $dirname): bool
-    {
-        $lowerName = strtolower($dirname);
-
-        // Check ignored directories
-        if (in_array($lowerName, array_map('strtolower', $this->ignoredDirectories), true)) {
-            return false;
-        }
-
-        // Additional security checks
-        $dangerousDirs = ['tmp', 'temp', 'log', 'logs', 'backup', 'backups'];
-        if (in_array($lowerName, $dangerousDirs, true)) {
-            return false;
-        }
-
-        return $this->isSecureDirectoryName($dirname);
-    }
-
-    /**
-     * Process glob pattern
-     */
-    private function processGlobPattern(string $pattern): void
-    {
-        $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
-        if ($matches === false) {
-            return;
-        }
-
-        // Limit number of directories
-        $matches = array_slice($matches, 0, 50);
-
-        foreach ($matches as $match) {
-            $this->scanDirectory($match);
-        }
     }
 
     /**
@@ -306,6 +405,25 @@ final class RouteDiscovery
     }
 
     /**
+     * Discover routes with pattern matching
+     */
+    public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
+    {
+        if (!is_dir($baseDir)) {
+            throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
+        }
+
+        $fullPattern = rtrim($baseDir, '/') . '/' . ltrim($pattern, '/');
+        $files = glob($fullPattern, GLOB_BRACE);
+
+        if ($files === false) {
+            throw new \RuntimeException("Failed to execute glob pattern: {$fullPattern}");
+        }
+
+        $this->discoverInFiles($files);
+    }
+
+    /**
      * Discover routes in specific files
      */
     public function discoverInFiles(array $filePaths): void
@@ -314,108 +432,6 @@ final class RouteDiscovery
         $this->resetCounters();
 
         $this->processBatch($filePaths);
-    }
-
-    /**
-     * Check if class has route attributes
-     */
-    public function hasRouteAttributes(string $className): bool
-    {
-        if (!class_exists($className)) {
-            return false;
-        }
-
-        try {
-            $reflection = new ReflectionClass($className);
-            return !empty($reflection->getAttributes(Route::class));
-        } catch (\ReflectionException) {
-            return false;
-        }
-    }
-
-    /**
-     * Get discovery statistics
-     */
-    public function getStats(): array
-    {
-        $scannerStats = $this->scanner->getStats();
-
-        return [
-            'processed_files' => $this->processedFiles,
-            'discovered_routes' => $this->discoveredRoutes,
-            'cached_classes' => count($this->classCache),
-            'successful_classes' => count(array_filter($this->classCache)),
-            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
-            'scanner_stats' => $scannerStats,
-            'memory_usage' => memory_get_usage(true),
-            'peak_memory' => memory_get_peak_usage(true),
-            'strict_mode' => $this->strictMode,
-            'max_depth' => $this->maxDepth,
-        ];
-    }
-
-    /**
-     * Clear all caches
-     */
-    public function clearCache(): void
-    {
-        $this->classCache = [];
-        $this->scanner->clearCache();
-        $this->resetCounters();
-    }
-
-    /**
-     * Reset performance counters
-     */
-    private function resetCounters(): void
-    {
-        $this->processedFiles = 0;
-        $this->discoveredRoutes = 0;
-    }
-
-    /**
-     * Validate configuration
-     */
-    private function validateConfiguration(): void
-    {
-        if ($this->maxDepth < 1 || $this->maxDepth > 20) {
-            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
-        }
-
-        // Validate ignored directories
-        foreach ($this->ignoredDirectories as $dir) {
-            if (!is_string($dir) || strlen($dir) > 100) {
-                throw new \InvalidArgumentException('Invalid ignored directory specification');
-            }
-        }
-    }
-
-    /**
-     * Validate directories input
-     */
-    private function validateDirectories(array $directories): void
-    {
-        if (empty($directories)) {
-            throw new \InvalidArgumentException('At least one directory must be specified');
-        }
-
-        if (count($directories) > 20) {
-            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
-        }
-
-        foreach ($directories as $directory) {
-            if (!is_string($directory)) {
-                throw new \InvalidArgumentException('Directory must be a string');
-            }
-
-            if (strlen($directory) > 500) {
-                throw new \InvalidArgumentException('Directory path too long');
-            }
-
-            if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
-                throw new \InvalidArgumentException('Directory path contains invalid characters');
-            }
-        }
     }
 
     /**
@@ -447,102 +463,6 @@ final class RouteDiscovery
     }
 
     /**
-     * Check if path is secure
-     */
-    private function isSecurePath(string $path): bool
-    {
-        // Basic security check
-        if (str_contains($path, '..') || str_contains($path, "\0")) {
-            return false;
-        }
-
-        // Check if path is within allowed boundaries (if strict mode)
-        if ($this->strictMode) {
-            $cwd = realpath(getcwd());
-            if ($cwd === false || !str_starts_with($path, $cwd)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Check if directory name is secure
-     */
-    private function isSecureDirectoryName(string $dirname): bool
-    {
-        // Dangerous directory names
-        $dangerous = [
-            'bin', 'sbin', 'etc', 'proc', 'dev', 'sys',
-            'admin', 'config', 'secret', 'private', 'hidden'
-        ];
-
-        return !in_array(strtolower($dirname), $dangerous, true);
-    }
-
-    /**
-     * Get cache efficiency metrics
-     */
-    public function getCacheEfficiency(): array
-    {
-        $scannerEfficiency = $this->scanner->getCacheEfficiency();
-
-        return [
-            'class_cache_size' => count($this->classCache),
-            'class_success_rate' => count($this->classCache) > 0
-                ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
-                : 0,
-            'scanner_efficiency' => $scannerEfficiency,
-            'memory_per_class' => count($this->classCache) > 0
-                ? memory_get_usage(true) / count($this->classCache)
-                : 0,
-        ];
-    }
-
-    /**
-     * Auto-discover with default paths
-     */
-    public function autoDiscover(): void
-    {
-        $defaultPaths = [
-            'app/Actions',
-            'app/Controllers',
-            'app/Http/Actions',
-            'app/Http/Controllers',
-            'src/Actions',
-            'src/Controllers'
-        ];
-
-        $existingPaths = array_filter($defaultPaths, 'is_dir');
-
-        if (empty($existingPaths)) {
-            throw new \RuntimeException('No default discovery paths found');
-        }
-
-        $this->discover($existingPaths);
-    }
-
-    /**
-     * Discover routes with pattern matching
-     */
-    public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
-    {
-        if (!is_dir($baseDir)) {
-            throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
-        }
-
-        $fullPattern = rtrim($baseDir, '/') . '/' . ltrim($pattern, '/');
-        $files = glob($fullPattern, GLOB_BRACE);
-
-        if ($files === false) {
-            throw new \RuntimeException("Failed to execute glob pattern: {$fullPattern}");
-        }
-
-        $this->discoverInFiles($files);
-    }
-
-    /**
      * Get discovered routes summary
      */
     public function getDiscoveredRoutes(): array
@@ -570,5 +490,85 @@ final class RouteDiscovery
             'max_depth' => $this->maxDepth,
             'scanner_stats' => $this->scanner->getStats(),
         ];
+    }
+
+    /**
+     * Get discovery statistics
+     */
+    public function getStats(): array
+    {
+        $scannerStats = $this->scanner->getStats();
+
+        return [
+            'processed_files' => $this->processedFiles,
+            'discovered_routes' => $this->discoveredRoutes,
+            'cached_classes' => count($this->classCache),
+            'successful_classes' => count(array_filter($this->classCache)),
+            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
+            'scanner_stats' => $scannerStats,
+            'memory_usage' => memory_get_usage(true),
+            'peak_memory' => memory_get_peak_usage(true),
+            'strict_mode' => $this->strictMode,
+            'max_depth' => $this->maxDepth,
+        ];
+    }
+
+    /**
+     * Create file filter for iterator
+     */
+    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
+    {
+        $filename = $file->getFilename();
+
+        // Fast exclusion checks
+        if (str_starts_with($filename, '.') ||
+            str_starts_with($filename, '_') ||
+            str_starts_with($filename, '#')) {
+            return false;
+        }
+
+        if ($file->isDir()) {
+            return $this->isAllowedDirectory($filename);
+        }
+
+        // File validation - delegate to scanner
+        return $file->getExtension() === 'php' &&
+            $file->isReadable() &&
+            $file->getSize() > 0;
+    }
+
+    /**
+     * Check if directory is allowed
+     */
+    private function isAllowedDirectory(string $dirname): bool
+    {
+        $lowerName = strtolower($dirname);
+
+        // Check ignored directories
+        if (in_array($lowerName, array_map('strtolower', $this->ignoredDirectories), true)) {
+            return false;
+        }
+
+        // Additional security checks
+        $dangerousDirs = ['tmp', 'temp', 'log', 'logs', 'backup', 'backups'];
+        if (in_array($lowerName, $dangerousDirs, true)) {
+            return false;
+        }
+
+        return $this->isSecureDirectoryName($dirname);
+    }
+
+    /**
+     * Check if directory name is secure
+     */
+    private function isSecureDirectoryName(string $dirname): bool
+    {
+        // Dangerous directory names
+        $dangerous = [
+            'bin', 'sbin', 'etc', 'proc', 'dev', 'sys',
+            'admin', 'config', 'secret', 'private', 'hidden'
+        ];
+
+        return !in_array(strtolower($dirname), $dangerous, true);
     }
 }

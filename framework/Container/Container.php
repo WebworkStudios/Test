@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 use Framework\Container\Attributes\{Config, Inject};
-use Framework\Container\Lazy\LazyProxy;
 
 /**
  * High-Performance Framework Container für PHP 8.4
@@ -29,6 +28,9 @@ final class Container implements ContainerInterface
     }
 
     // Konsolidierte Registry für bessere Memory Efficiency
+    public readonly array $config;
+
+    // Performance Optimierungen
     private array $registry = [
         'services' => [],      // Service definitions
         'instances' => [],     // Resolved singletons
@@ -37,19 +39,17 @@ final class Container implements ContainerInterface
         'building' => [],     // Circular dependency tracking
         'contextual' => [],   // Contextual bindings
     ];
-
-    // Performance Optimierungen
     private \WeakMap $reflectionCache;
-    private bool $compiled = false;
 
     // Security & Config
-    public readonly array $config;
+    private bool $compiled = false;
     private readonly SecurityValidator $securityValidator;
 
     public function __construct(
         array $config = [],
         array $allowedPaths = []
-    ) {
+    )
+    {
         $this->config = $config;
         $this->reflectionCache = new \WeakMap();
         $this->securityValidator = new SecurityValidator(
@@ -61,6 +61,178 @@ final class Container implements ContainerInterface
         $this->instance(self::class, $this);
         $this->instance(Container::class, $this);
         $this->instance(ContainerInterface::class, $this);
+    }
+
+    /**
+     * Register existing instance
+     */
+    public function instance(string $id, object $instance): static
+    {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
+        $this->registry['instances'][$id] = $instance;
+        $this->registry['meta'][$id] = [
+            'singleton' => true,
+            'tags' => []
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Register singleton
+     */
+    public function singleton(string $id, mixed $concrete = null): static
+    {
+        return $this->bind($id, $concrete, true);
+    }
+
+    /**
+     * Register service binding
+     */
+    public function bind(string $id, mixed $concrete = null, bool $singleton = false): static
+    {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
+        $this->registry['services'][$id] = $concrete ?? $id;
+        $this->registry['meta'][$id] = [
+            'singleton' => $singleton,
+            'tags' => []
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Register lazy service
+     */
+    public function lazy(string $id, callable $factory, bool $singleton = true): static
+    {
+        if (!$this->securityValidator->isServiceIdSafe($id)) {
+            throw ContainerException::invalidService($id, 'Invalid service ID format');
+        }
+
+        $this->registry['lazy'][$id] = [
+            'factory' => $factory,
+            'singleton' => $singleton,
+            'proxy' => null
+        ];
+
+        $this->registry['meta'][$id] = [
+            'singleton' => $singleton,
+            'tags' => []
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Tag service für discovery
+     */
+    public function tag(string $id, string $tag): static
+    {
+        if (!$this->securityValidator->isServiceIdSafe($tag)) {
+            throw ContainerException::invalidService($tag, 'Invalid tag format');
+        }
+
+        if (!isset($this->registry['meta'][$id])) {
+            throw ContainerNotFoundException::serviceNotFound($id);
+        }
+
+        $this->registry['meta'][$id]['tags'][] = $tag;
+        return $this;
+    }
+
+    /**
+     * Contextual binding builder
+     */
+    public function when(string $context): ContextualBindingBuilder
+    {
+        return new ContextualBindingBuilder($this, $context);
+    }
+
+    /**
+     * Internal method für contextual bindings
+     */
+    public function addContextualBinding(string $context, string $abstract, mixed $concrete): void
+    {
+        $this->registry['contextual'][$context][$abstract] = $concrete;
+    }
+
+    /**
+     * Forget service
+     */
+    public function forget(string $id): static
+    {
+        unset(
+            $this->registry['services'][$id],
+            $this->registry['instances'][$id],
+            $this->registry['meta'][$id],
+            $this->registry['lazy'][$id]
+        );
+
+        return $this;
+    }
+
+    /**
+     * Clear all services
+     */
+    public function flush(): static
+    {
+        $this->registry = [
+            'services' => [],
+            'instances' => [],
+            'meta' => [],
+            'lazy' => [],
+            'building' => [],
+            'contextual' => []
+        ];
+
+        $this->reflectionCache = new \WeakMap();
+        $this->compiled = false;
+
+        // Self-registration
+        $this->instance(self::class, $this);
+        $this->instance(Container::class, $this);
+        $this->instance(ContainerInterface::class, $this);
+
+        return $this;
+    }
+
+    /**
+     * Compile container für maximale Performance
+     */
+    public function compile(): static
+    {
+        $this->compiled = true;
+        return $this;
+    }
+
+    /**
+     * Memory cleanup für Lazy Objects
+     */
+    public function gc(): int
+    {
+        $cleaned = 0;
+
+        // Cleanup lazy proxies ohne Referenzen
+        foreach ($this->registry['lazy'] as $id => $config) {
+            if (isset($config['proxy']) && !isset($this->registry['instances'][$id])) {
+                $this->registry['lazy'][$id]['proxy'] = null;
+                $cleaned++;
+            }
+        }
+
+        return $cleaned;
+    }
+
+    public function get(string $id): mixed
+    {
+        return $this->resolve($id);
     }
 
     /**
@@ -99,35 +271,6 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Optimierte Standard-Auflösung
-     */
-    private function resolveStandard(string $id): mixed
-    {
-        // Circular dependency check
-        if (isset($this->registry['building'][$id])) {
-            $chain = array_keys($this->registry['building']);
-            $chain[] = $id;
-            throw ContainerException::circularDependency($chain);
-        }
-
-        $this->registry['building'][$id] = true;
-
-        try {
-            $concrete = $this->registry['services'][$id];
-            $instance = $this->build($concrete);
-
-            // Cache singletons
-            if ($this->isSingleton($id)) {
-                $this->registry['instances'][$id] = $instance;
-            }
-
-            return $instance;
-        } finally {
-            unset($this->registry['building'][$id]);
-        }
-    }
-
-    /**
      * Resolve contextual binding
      */
     private function resolveContextual(string $context, string $id): mixed
@@ -135,6 +278,8 @@ final class Container implements ContainerInterface
         $concrete = $this->registry['contextual'][$context][$id];
         return $this->build($concrete);
     }
+
+    // === PUBLIC API ===
 
     /**
      * Build instance mit optimierter Reflection
@@ -266,7 +411,8 @@ final class Container implements ContainerInterface
     private function resolveInjectAttribute(
         \ReflectionAttribute $attr,
         \ReflectionParameter $parameter
-    ): mixed {
+    ): mixed
+    {
         $inject = $attr->newInstance();
 
         if ($inject->id !== null) {
@@ -294,12 +440,39 @@ final class Container implements ContainerInterface
     }
 
     /**
+     * Check if service is registered
+     */
+    public function isRegistered(string $id): bool
+    {
+        return isset($this->registry['services'][$id]) ||
+            isset($this->registry['instances'][$id]) ||
+            isset($this->registry['lazy'][$id]);
+    }
+
+    /**
+     * Get services by tag
+     */
+    public function tagged(string $tag): array
+    {
+        $services = [];
+
+        foreach ($this->registry['meta'] as $id => $meta) {
+            if (in_array($tag, $meta['tags'], true)) {
+                $services[] = $this->resolve($id);
+            }
+        }
+
+        return $services;
+    }
+
+    /**
      * Resolve Config Attribut
      */
     private function resolveConfigAttribute(
         \ReflectionAttribute $attr,
         \ReflectionParameter $parameter
-    ): mixed {
+    ): mixed
+    {
         $config = $attr->newInstance();
         return $this->getConfig($config->key, $config->default);
     }
@@ -353,21 +526,18 @@ final class Container implements ContainerInterface
      */
     private function createLazyProxy(string $id, callable $factory): object
     {
-        // PHP 8.4 Native Lazy Objects wenn verfügbar
-        if (method_exists(\ReflectionClass::class, 'newLazyProxy')) {
-            $initializer = fn() => $factory($this);
+        $initializer = fn() => $factory($this);
 
-            // Versuche Zielklasse zu ermitteln für typed proxy
-            $targetClass = $this->determineTargetClass($factory);
+        // Versuche Zielklasse zu ermitteln für typed proxy
+        $targetClass = $this->determineTargetClass($factory);
 
-            if ($targetClass && class_exists($targetClass)) {
-                $reflection = $this->getCachedReflection($targetClass);
-                return $reflection->newLazyProxy($initializer);
-            }
+        if ($targetClass && class_exists($targetClass)) {
+            $reflection = $this->getCachedReflection($targetClass);
+            return $reflection->newLazyProxy($initializer);
         }
 
-        // Fallback für ältere PHP Versionen oder unbekannte Zielklasse
-        return new LazyProxy($factory, $this, $id);
+        // PHP 8.4 native lazy object für unbekannte Zielklasse
+        return (new \ReflectionClass(\stdClass::class))->newLazyProxy($initializer);
     }
 
     /**
@@ -382,218 +552,47 @@ final class Container implements ContainerInterface
         return null; // Für komplexere Fälle verwenden wir Generic Proxy
     }
 
-    // === PUBLIC API ===
-
-    /**
-     * Register service binding
-     */
-    public function bind(string $id, mixed $concrete = null, bool $singleton = false): self
-    {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
-            throw ContainerException::invalidService($id, 'Invalid service ID format');
-        }
-
-        $this->registry['services'][$id] = $concrete ?? $id;
-        $this->registry['meta'][$id] = [
-            'singleton' => $singleton,
-            'tags' => []
-        ];
-
-        return $this;
-    }
-
-    /**
-     * Register singleton
-     */
-    public function singleton(string $id, mixed $concrete = null): self
-    {
-        return $this->bind($id, $concrete, true);
-    }
-
-    /**
-     * Register existing instance
-     */
-    public function instance(string $id, object $instance): self
-    {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
-            throw ContainerException::invalidService($id, 'Invalid service ID format');
-        }
-
-        $this->registry['instances'][$id] = $instance;
-        $this->registry['meta'][$id] = [
-            'singleton' => true,
-            'tags' => []
-        ];
-
-        return $this;
-    }
-
-    /**
-     * Register lazy service
-     */
-    public function lazy(string $id, callable $factory, bool $singleton = true): self
-    {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
-            throw ContainerException::invalidService($id, 'Invalid service ID format');
-        }
-
-        $this->registry['lazy'][$id] = [
-            'factory' => $factory,
-            'singleton' => $singleton,
-            'proxy' => null
-        ];
-
-        $this->registry['meta'][$id] = [
-            'singleton' => $singleton,
-            'tags' => []
-        ];
-
-        return $this;
-    }
-
-    /**
-     * Tag service für discovery
-     */
-    public function tag(string $id, string $tag): self
-    {
-        if (!$this->securityValidator->isServiceIdSafe($tag)) {
-            throw ContainerException::invalidService($tag, 'Invalid tag format');
-        }
-
-        if (!isset($this->registry['meta'][$id])) {
-            throw ContainerNotFoundException::serviceNotFound($id);
-        }
-
-        $this->registry['meta'][$id]['tags'][] = $tag;
-        return $this;
-    }
-
-    /**
-     * Get services by tag
-     */
-    public function tagged(string $tag): array
-    {
-        $services = [];
-
-        foreach ($this->registry['meta'] as $id => $meta) {
-            if (in_array($tag, $meta['tags'], true)) {
-                $services[] = $this->resolve($id);
-            }
-        }
-
-        return $services;
-    }
-
-    /**
-     * Check if service is registered
-     */
-    public function isRegistered(string $id): bool
-    {
-        return isset($this->registry['services'][$id]) ||
-            isset($this->registry['instances'][$id]) ||
-            isset($this->registry['lazy'][$id]);
-    }
-
-    /**
-     * Contextual binding builder
-     */
-    public function when(string $context): ContextualBindingBuilder
-    {
-        return new ContextualBindingBuilder($this, $context);
-    }
-
-    /**
-     * Internal method für contextual bindings
-     */
-    public function addContextualBinding(string $context, string $abstract, mixed $concrete): void
-    {
-        $this->registry['contextual'][$context][$abstract] = $concrete;
-    }
-
-    /**
-     * Forget service
-     */
-    public function forget(string $id): self
-    {
-        unset(
-            $this->registry['services'][$id],
-            $this->registry['instances'][$id],
-            $this->registry['meta'][$id],
-            $this->registry['lazy'][$id]
-        );
-
-        return $this;
-    }
-
-    /**
-     * Clear all services
-     */
-    public function flush(): self
-    {
-        $this->registry = [
-            'services' => [],
-            'instances' => [],
-            'meta' => [],
-            'lazy' => [],
-            'building' => [],
-            'contextual' => []
-        ];
-
-        $this->reflectionCache = new \WeakMap();
-        $this->compiled = false;
-
-        // Self-registration
-        $this->instance(self::class, $this);
-        $this->instance(Container::class, $this);
-        $this->instance(ContainerInterface::class, $this);
-
-        return $this;
-    }
-
-    /**
-     * Compile container für maximale Performance
-     */
-    public function compile(): self
-    {
-        $this->compiled = true;
-        return $this;
-    }
-
-    /**
-     * Memory cleanup für Lazy Objects
-     */
-    public function gc(): int
-    {
-        $cleaned = 0;
-
-        // Cleanup lazy proxies ohne Referenzen
-        foreach ($this->registry['lazy'] as $id => $config) {
-            if (isset($config['proxy']) && !isset($this->registry['instances'][$id])) {
-                $this->registry['lazy'][$id]['proxy'] = null;
-                $cleaned++;
-            }
-        }
-
-        return $cleaned;
-    }
-
     // === ContainerInterface Implementation ===
 
-    public function get(string $id): mixed
+    /**
+     * Optimierte Standard-Auflösung
+     */
+    private function resolveStandard(string $id): mixed
     {
-        return $this->resolve($id);
-    }
+        // Circular dependency check
+        if (isset($this->registry['building'][$id])) {
+            $chain = array_keys($this->registry['building']);
+            $chain[] = $id;
+            throw ContainerException::circularDependency($chain);
+        }
 
-    public function has(string $id): bool
-    {
-        return $this->isRegistered($id);
-    }
+        $this->registry['building'][$id] = true;
 
-    // === Private Helper Methods ===
+        try {
+            $concrete = $this->registry['services'][$id];
+            $instance = $this->build($concrete);
+
+            // Cache singletons
+            if ($this->isSingleton($id)) {
+                $this->registry['instances'][$id] = $instance;
+            }
+
+            return $instance;
+        } finally {
+            unset($this->registry['building'][$id]);
+        }
+    }
 
     private function isSingleton(string $id): bool
     {
         return $this->registry['meta'][$id]['singleton'] ?? false;
+    }
+
+    // === Private Helper Methods ===
+
+    public function has(string $id): bool
+    {
+        return $this->isRegistered($id);
     }
 
     /**

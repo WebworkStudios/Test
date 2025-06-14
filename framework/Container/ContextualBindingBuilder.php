@@ -14,24 +14,13 @@ final readonly class ContextualBindingBuilder
 {
     public function __construct(
         private Container $container,
-        private string $context
-    ) {
+        private string    $context
+    )
+    {
         // Validate context
         if (empty($this->context) || str_contains($this->context, '..')) {
             throw new \InvalidArgumentException('Invalid context format');
         }
-    }
-
-    /**
-     * Specify the abstract the contextual binding is for
-     */
-    public function needs(string $abstract): ContextualBindingNeedsBuilder
-    {
-        if (empty($abstract) || str_contains($abstract, '..')) {
-            throw new \InvalidArgumentException('Invalid abstract format');
-        }
-
-        return new ContextualBindingNeedsBuilder($this->container, $this->context, $abstract);
     }
 
     /**
@@ -50,6 +39,18 @@ final readonly class ContextualBindingBuilder
                 error_log("Failed to register contextual binding for '{$abstract}': " . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Specify the abstract the contextual binding is for
+     */
+    public function needs(string $abstract): ContextualBindingNeedsBuilder
+    {
+        if (empty($abstract) || str_contains($abstract, '..')) {
+            throw new \InvalidArgumentException('Invalid abstract format');
+        }
+
+        return new ContextualBindingNeedsBuilder($this->container, $this->context, $abstract);
     }
 
     /**

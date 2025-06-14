@@ -6,7 +6,7 @@ namespace Framework\Routing;
 
 use Framework\Container\ContainerInterface;
 use Framework\Http\{Request, Response};
-use Framework\Routing\Exceptions\{RouteNotFoundException, MethodNotAllowedException};
+use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
 
 /**
  * Optimized HTTP Router with PHP 8.4 features
@@ -54,18 +54,101 @@ final class Router
 
     public function __construct(
         private readonly ContainerInterface $container,
-        private readonly ?RouteCache $cache = null,
-        private readonly ?RouteDiscovery $discovery = null,
-        private readonly bool $debugMode = false,
-        private readonly bool $strictMode = true,
-        private readonly array $allowedSubdomains = ['api', 'admin', 'www'],
-        private readonly string $baseDomain = 'localhost'
-    ) {
+        private readonly ?RouteCache        $cache = null,
+        private readonly ?RouteDiscovery    $discovery = null,
+        private readonly bool               $debugMode = false,
+        private readonly bool               $strictMode = true,
+        private readonly array              $allowedSubdomains = ['api', 'admin', 'www'],
+        private readonly string             $baseDomain = 'localhost'
+    )
+    {
         $this->loadCachedRoutes();
 
         // Auto-discovery if configured
         if ($this->discovery !== null && $this->debugMode) {
             $this->autoDiscoverRoutes();
+        }
+    }
+
+    /**
+     * Load cached routes
+     */
+    private function loadCachedRoutes(): void
+    {
+        if ($this->cache === null || $this->debugMode) {
+            return;
+        }
+
+        $cached = $this->cache->load();
+        if ($cached !== null && $this->validateCachedRoutes($cached)) {
+            $this->routes = $cached;
+            $this->rebuildNamedRoutes();
+            $this->routesCompiled = false; // Will be compiled on first use
+        }
+    }
+
+    /**
+     * Validate cached routes
+     */
+    private function validateCachedRoutes(array $cached): bool
+    {
+        foreach ($cached as $method => $routes) {
+            if (!is_string($method) || !is_array($routes)) {
+                return false;
+            }
+
+            foreach ($routes as $route) {
+                if (!($route instanceof RouteInfo)) {
+                    return false;
+                }
+
+                // Validate action class still exists
+                if (!class_exists($route->actionClass)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Rebuild named routes from cached data
+     */
+    private function rebuildNamedRoutes(): void
+    {
+        $this->namedRoutes = [];
+
+        foreach ($this->routes as $routes) {
+            foreach ($routes as $route) {
+                if ($route->name !== null) {
+                    $this->namedRoutes[$route->name] = $route;
+                }
+            }
+        }
+    }
+
+    /**
+     * Auto-discover routes
+     */
+    public function autoDiscoverRoutes(array $directories = []): void
+    {
+        if ($this->discovery === null) {
+            throw new \RuntimeException('RouteDiscovery not configured');
+        }
+
+        if (empty($directories)) {
+            $directories = [
+                'app/Actions',
+                'app/Controllers',
+                'app/Http/Actions',
+                'app/Http/Controllers'
+            ];
+        }
+
+        $existingDirs = array_filter($directories, 'is_dir');
+        if (!empty($existingDirs)) {
+            $this->discovery->discover($existingDirs);
         }
     }
 
@@ -97,13 +180,14 @@ final class Router
      * Add route to router
      */
     public function addRoute(
-        string $method,
-        string $path,
-        string $actionClass,
-        array $middleware = [],
+        string  $method,
+        string  $path,
+        string  $actionClass,
+        array   $middleware = [],
         ?string $name = null,
         ?string $subdomain = null
-    ): void {
+    ): void
+    {
 
 
         $this->validateMiddleware($middleware);
@@ -137,6 +221,67 @@ final class Router
         $this->routesCompiled = false;
         $this->cachedRouteCount = null;
         $this->clearCaches();
+    }
+
+    /**
+     * Validate middleware array
+     */
+    private function validateMiddleware(array $middleware): void
+    {
+        if (count($middleware) > 10) {
+            throw new \InvalidArgumentException('Too many middleware (max 10)');
+        }
+
+        foreach ($middleware as $mw) {
+            if (!is_string($mw) || strlen($mw) > 100) {
+                throw new \InvalidArgumentException('Invalid middleware specification');
+            }
+        }
+    }
+
+    /**
+     * Validate route name
+     */
+    private function validateRouteName(?string $name): void
+    {
+        if ($name === null) {
+            return;
+        }
+
+        if (strlen($name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
+            throw new \InvalidArgumentException("Invalid route name: {$name}");
+        }
+    }
+
+    /**
+     * Validate subdomain input
+     */
+    private function validateSubdomain(?string $subdomain): void
+    {
+        if ($subdomain !== null && !$this->isValidSubdomain($subdomain)) {
+            throw new \InvalidArgumentException("Invalid subdomain: {$subdomain}");
+        }
+    }
+
+    /**
+     * Validate subdomain
+     */
+    private function isValidSubdomain(string $subdomain): bool
+    {
+        if (strlen($subdomain) > 63 || strlen($subdomain) === 0) {
+            return false;
+        }
+
+        return preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCaches(): void
+    {
+        $this->routeCache = [];
+        $this->cache?->clear();
     }
 
     /**
@@ -193,378 +338,6 @@ final class Router
     }
 
     /**
-     * Find matching route
-     */
-    private function findMatchingRoute(string $method, string $path, ?string $subdomain): ?array
-    {
-        if (!isset($this->routes[$method])) {
-            return null;
-        }
-
-        // Try static routes first (O(1) lookup)
-        if (isset($this->staticRoutes[$method])) {
-            $staticKey = $this->generateStaticKey($path, $subdomain);
-            if (isset($this->staticRoutes[$method][$staticKey])) {
-                return [$this->staticRoutes[$method][$staticKey], []];
-            }
-        }
-
-        // Try dynamic routes
-        if (isset($this->dynamicRoutes[$method])) {
-            foreach ($this->dynamicRoutes[$method] as $route) {
-                if ($route->matches($method, $path, $subdomain)) {
-                    try {
-                        $params = $route->extractParams($path);
-                        return [$route, $params];
-                    } catch (\InvalidArgumentException) {
-                        continue; // Try next route
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Compile routes for optimized matching
-     */
-    private function compileRoutes(): void
-    {
-        if ($this->routesCompiled) {
-            return;
-        }
-
-        $this->staticRoutes = [];
-        $this->dynamicRoutes = [];
-
-        foreach ($this->routes as $method => $routes) {
-            $this->staticRoutes[$method] = [];
-            $this->dynamicRoutes[$method] = [];
-
-            foreach ($routes as $route) {
-                if ($route->isStatic) {
-                    // Static route - direct lookup
-                    $key = $this->generateStaticKey($route->originalPath, $route->subdomain);
-                    $this->staticRoutes[$method][$key] = $route;
-                } else {
-                    // Dynamic route - pattern matching required
-                    $this->dynamicRoutes[$method][] = $route;
-                }
-            }
-
-            // Sort dynamic routes for optimal matching
-            $this->optimizeDynamicRoutes($method);
-        }
-
-        $this->routesCompiled = true;
-
-        // Store in cache if available
-        if ($this->cache !== null && !$this->debugMode) {
-            $this->cache->store($this->routes);
-        }
-    }
-
-    /**
-     * Optimize dynamic routes order for better performance
-     */
-    private function optimizeDynamicRoutes(string $method): void
-    {
-        if (!isset($this->dynamicRoutes[$method])) {
-            return;
-        }
-
-        usort($this->dynamicRoutes[$method], function(RouteInfo $a, RouteInfo $b): int {
-            // Routes with fewer parameters first
-            $paramDiff = count($a->paramNames) - count($b->paramNames);
-            if ($paramDiff !== 0) {
-                return $paramDiff;
-            }
-
-            // Routes with subdomain constraints first
-            if ($a->subdomain !== null && $b->subdomain === null) {
-                return -1;
-            }
-            if ($a->subdomain === null && $b->subdomain !== null) {
-                return 1;
-            }
-
-            // Shorter paths first
-            return strlen($a->originalPath) - strlen($b->originalPath);
-        });
-    }
-
-    /**
-     * Generate URL for named route
-     */
-    public function url(string $name, array $params = [], ?string $subdomain = null): string
-    {
-        if (!isset($this->namedRoutes[$name])) {
-            throw new RouteNotFoundException("Named route '{$name}' not found");
-        }
-
-        $route = $this->namedRoutes[$name];
-        $path = $route->originalPath;
-
-        // Replace parameters
-        foreach ($params as $key => $value) {
-            $sanitizedKey = $this->sanitizeParameterKey($key);
-            $sanitizedValue = $this->sanitizeParameterValue($value);
-            $path = str_replace("{{$sanitizedKey}}", $sanitizedValue, $path);
-        }
-
-        // Check for missing parameters
-        if (preg_match('/{[^}]+}/', $path)) {
-            throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
-        }
-
-        // Add subdomain if specified
-        $routeSubdomain = $subdomain ?? $route->subdomain;
-        if ($routeSubdomain !== null) {
-            return $this->buildUrl($routeSubdomain, $path);
-        }
-
-        return $path;
-    }
-
-    /**
-     * Check if route exists
-     */
-    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
-    {
-        $this->compileRoutes();
-
-        $method = strtoupper($method);
-        $path = $this->sanitizePath($path);
-        $subdomain = $this->validateSubdomainInput($subdomain);
-
-        return $this->findMatchingRoute($method, $path, $subdomain) !== null;
-    }
-
-    /**
-     * Get all registered routes
-     */
-    public function getRoutes(): array
-    {
-        return $this->routes;
-    }
-
-    /**
-     * Get named routes
-     */
-    public function getNamedRoutes(): array
-    {
-        return $this->namedRoutes;
-    }
-
-    /**
-     * Auto-discover routes
-     */
-    public function autoDiscoverRoutes(array $directories = []): void
-    {
-        if ($this->discovery === null) {
-            throw new \RuntimeException('RouteDiscovery not configured');
-        }
-
-        if (empty($directories)) {
-            $directories = [
-                'app/Actions',
-                'app/Controllers',
-                'app/Http/Actions',
-                'app/Http/Controllers'
-            ];
-        }
-
-        $existingDirs = array_filter($directories, 'is_dir');
-        if (!empty($existingDirs)) {
-            $this->discovery->discover($existingDirs);
-        }
-    }
-
-    /**
-     * Get router statistics
-     */
-    public function getStats(): array
-    {
-        return [
-            'route_count' => $this->routeCount,
-            'static_routes' => $this->staticRouteCount,
-            'dynamic_routes' => $this->dynamicRouteCount,
-            'named_routes' => count($this->namedRoutes),
-            'supported_methods' => $this->supportedMethods,
-            'is_compiled' => $this->isCompiled,
-            'dispatch_count' => $this->dispatchCount,
-            'cache_hits' => $this->cacheHits,
-            'cache_hit_ratio' => $this->dispatchCount > 0
-                ? round(($this->cacheHits / $this->dispatchCount) * 100, 2)
-                : 0,
-            'average_dispatch_time_ms' => $this->dispatchCount > 0
-                ? round($this->totalDispatchTime / $this->dispatchCount, 3)
-                : 0,
-            'cached_routes' => count($this->routeCache),
-            'memory_usage' => memory_get_usage(true),
-        ];
-    }
-
-    /**
-     * Clear all caches
-     */
-    public function clearCaches(): void
-    {
-        $this->routeCache = [];
-        $this->cache?->clear();
-    }
-
-    /**
-     * Warm up router caches
-     */
-    public function warmUp(): void
-    {
-        $this->compileRoutes();
-
-        // Pre-cache common paths if available
-        $commonPaths = ['/', '/home', '/about', '/api/health'];
-        foreach ($commonPaths as $path) {
-            foreach ($this->supportedMethods as $method) {
-                try {
-                    $this->findMatchingRoute($method, $path, null);
-                } catch (\Throwable) {
-                    // Ignore errors during warm-up
-                }
-            }
-        }
-    }
-
-    /**
-     * Load cached routes
-     */
-    private function loadCachedRoutes(): void
-    {
-        if ($this->cache === null || $this->debugMode) {
-            return;
-        }
-
-        $cached = $this->cache->load();
-        if ($cached !== null && $this->validateCachedRoutes($cached)) {
-            $this->routes = $cached;
-            $this->rebuildNamedRoutes();
-            $this->routesCompiled = false; // Will be compiled on first use
-        }
-    }
-
-    /**
-     * Rebuild named routes from cached data
-     */
-    private function rebuildNamedRoutes(): void
-    {
-        $this->namedRoutes = [];
-
-        foreach ($this->routes as $routes) {
-            foreach ($routes as $route) {
-                if ($route->name !== null) {
-                    $this->namedRoutes[$route->name] = $route;
-                }
-            }
-        }
-    }
-
-    /**
-     * Validate cached routes
-     */
-    private function validateCachedRoutes(array $cached): bool
-    {
-        foreach ($cached as $method => $routes) {
-            if (!is_string($method) || !is_array($routes)) {
-                return false;
-            }
-
-            foreach ($routes as $route) {
-                if (!($route instanceof RouteInfo)) {
-                    return false;
-                }
-
-                // Validate action class still exists
-                if (!class_exists($route->actionClass)) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Handle no route match
-     */
-    private function handleNoMatch(string $method, string $path, ?string $subdomain): never
-    {
-        // Check if path exists for other methods
-        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
-
-        if (!empty($availableMethods)) {
-            throw new MethodNotAllowedException(
-                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
-                $availableMethods
-            );
-        }
-
-        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
-            ($subdomain ? " (subdomain: {$subdomain})" : ""));
-    }
-
-    /**
-     * Get available methods for path
-     */
-    private function getAvailableMethodsForPath(string $path, ?string $subdomain): array
-    {
-        $methods = [];
-
-        foreach ($this->routes as $method => $routes) {
-            if ($this->findMatchingRoute($method, $path, $subdomain) !== null) {
-                $methods[] = $method;
-            }
-        }
-
-        return $methods;
-    }
-
-    /**
-     * Call action class
-     */
-    private function callAction(string $actionClass, Request $request, array $params): Response
-    {
-        $this->validateActionCall($actionClass, $params);
-
-        $action = $this->container->get($actionClass);
-
-        if (!is_callable($action)) {
-            throw new \RuntimeException("Action {$actionClass} is not callable");
-        }
-
-        try {
-            $result = $action($request, $params);
-            return $this->convertToResponse($result);
-        } catch (\Throwable $e) {
-            if ($this->debugMode) {
-                error_log("Action execution error in {$actionClass}: " . $e->getMessage());
-            }
-            throw $e;
-        }
-    }
-
-    /**
-     * Convert result to Response
-     */
-    private function convertToResponse(mixed $result): Response
-    {
-        return match(true) {
-            $result instanceof Response => $result,
-            is_array($result) || is_object($result) => Response::json($result),
-            default => Response::html(htmlspecialchars((string) $result, ENT_QUOTES | ENT_HTML5, 'UTF-8'))
-        };
-    }
-
-    /**
      * Validate request
      */
     private function validateRequest(Request $request): void
@@ -608,6 +381,98 @@ final class Router
     }
 
     /**
+     * Compile routes for optimized matching
+     */
+    private function compileRoutes(): void
+    {
+        if ($this->routesCompiled) {
+            return;
+        }
+
+        $this->staticRoutes = [];
+        $this->dynamicRoutes = [];
+
+        foreach ($this->routes as $method => $routes) {
+            $this->staticRoutes[$method] = [];
+            $this->dynamicRoutes[$method] = [];
+
+            foreach ($routes as $route) {
+                if ($route->isStatic) {
+                    // Static route - direct lookup
+                    $key = $this->generateStaticKey($route->originalPath, $route->subdomain);
+                    $this->staticRoutes[$method][$key] = $route;
+                } else {
+                    // Dynamic route - pattern matching required
+                    $this->dynamicRoutes[$method][] = $route;
+                }
+            }
+
+            // Sort dynamic routes for optimal matching
+            $this->optimizeDynamicRoutes($method);
+        }
+
+        $this->routesCompiled = true;
+
+        // Store in cache if available
+        if ($this->cache !== null && !$this->debugMode) {
+            $this->cache->store($this->routes);
+        }
+    }
+
+    /**
+     * Generate static route key
+     */
+    private function generateStaticKey(string $path, ?string $subdomain): string
+    {
+        return $subdomain ? "{$subdomain}:{$path}" : $path;
+    }
+
+    /**
+     * Optimize dynamic routes order for better performance
+     */
+    private function optimizeDynamicRoutes(string $method): void
+    {
+        if (!isset($this->dynamicRoutes[$method])) {
+            return;
+        }
+
+        usort($this->dynamicRoutes[$method], function (RouteInfo $a, RouteInfo $b): int {
+            // Routes with fewer parameters first
+            $paramDiff = count($a->paramNames) - count($b->paramNames);
+            if ($paramDiff !== 0) {
+                return $paramDiff;
+            }
+
+            // Routes with subdomain constraints first
+            if ($a->subdomain !== null && $b->subdomain === null) {
+                return -1;
+            }
+            if ($a->subdomain === null && $b->subdomain !== null) {
+                return 1;
+            }
+
+            // Shorter paths first
+            return strlen($a->originalPath) - strlen($b->originalPath);
+        });
+    }
+
+    /**
+     * Sanitize path
+     */
+    private function sanitizePath(string $path): string
+    {
+        // Remove dangerous sequences
+        $cleaned = str_replace(['../', '.\\', '..\\'], '', $path);
+
+        // Ensure path starts with /
+        if (!str_starts_with($cleaned, '/')) {
+            $cleaned = '/' . $cleaned;
+        }
+
+        return $cleaned;
+    }
+
+    /**
      * Extract subdomain from host
      */
     private function extractSubdomain(string $host): ?string
@@ -648,84 +513,44 @@ final class Router
     }
 
     /**
-     * Validate subdomain
+     * Generate cache key
      */
-    private function isValidSubdomain(string $subdomain): bool
+    private function generateCacheKey(string $method, string $path, ?string $subdomain): string
     {
-        if (strlen($subdomain) > 63 || strlen($subdomain) === 0) {
-            return false;
-        }
-
-        return preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
+        return hash('xxh3', $method . ':' . $path . ':' . ($subdomain ?? ''));
     }
 
     /**
-     * Sanitize path
+     * Check if cache entry is valid
      */
-    private function sanitizePath(string $path): string
+    private function isCacheValid(array $cachedRoute, Request $request): bool
     {
-        // Remove dangerous sequences
-        $cleaned = str_replace(['../', '.\\', '..\\'], '', $path);
-
-        // Ensure path starts with /
-        if (!str_starts_with($cleaned, '/')) {
-            $cleaned = '/' . $cleaned;
-        }
-
-        return $cleaned;
+        // Simple validation - could be extended
+        return isset($cachedRoute['route']) && $cachedRoute['route'] instanceof RouteInfo;
     }
 
     /**
-     * Validate middleware array
+     * Call action class
      */
-    private function validateMiddleware(array $middleware): void
+    private function callAction(string $actionClass, Request $request, array $params): Response
     {
-        if (count($middleware) > 10) {
-            throw new \InvalidArgumentException('Too many middleware (max 10)');
+        $this->validateActionCall($actionClass, $params);
+
+        $action = $this->container->get($actionClass);
+
+        if (!is_callable($action)) {
+            throw new \RuntimeException("Action {$actionClass} is not callable");
         }
 
-        foreach ($middleware as $mw) {
-            if (!is_string($mw) || strlen($mw) > 100) {
-                throw new \InvalidArgumentException('Invalid middleware specification');
+        try {
+            $result = $action($request, $params);
+            return $this->convertToResponse($result);
+        } catch (\Throwable $e) {
+            if ($this->debugMode) {
+                error_log("Action execution error in {$actionClass}: " . $e->getMessage());
             }
+            throw $e;
         }
-    }
-
-    /**
-     * Validate route name
-     */
-    private function validateRouteName(?string $name): void
-    {
-        if ($name === null) {
-            return;
-        }
-
-        if (strlen($name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
-            throw new \InvalidArgumentException("Invalid route name: {$name}");
-        }
-    }
-
-    /**
-     * Validate subdomain input
-     */
-    private function validateSubdomain(?string $subdomain): void
-    {
-        if ($subdomain !== null && !$this->isValidSubdomain($subdomain)) {
-            throw new \InvalidArgumentException("Invalid subdomain: {$subdomain}");
-        }
-    }
-
-    /**
-     * Validate subdomain input and return normalized value
-     */
-    private function validateSubdomainInput(?string $subdomain): ?string
-    {
-        if ($subdomain === null) {
-            return null;
-        }
-
-        $this->validateSubdomain($subdomain);
-        return $subdomain;
     }
 
     /**
@@ -742,6 +567,138 @@ final class Router
                 throw new \InvalidArgumentException("Parameter too large: {$key}");
             }
         }
+    }
+
+    /**
+     * Convert result to Response
+     */
+    private function convertToResponse(mixed $result): Response
+    {
+        return match (true) {
+            $result instanceof Response => $result,
+            is_array($result) || is_object($result) => Response::json($result),
+            default => Response::html(htmlspecialchars((string)$result, ENT_QUOTES | ENT_HTML5, 'UTF-8'))
+        };
+    }
+
+    /**
+     * Find matching route
+     */
+    private function findMatchingRoute(string $method, string $path, ?string $subdomain): ?array
+    {
+        if (!isset($this->routes[$method])) {
+            return null;
+        }
+
+        // Try static routes first (O(1) lookup)
+        if (isset($this->staticRoutes[$method])) {
+            $staticKey = $this->generateStaticKey($path, $subdomain);
+            if (isset($this->staticRoutes[$method][$staticKey])) {
+                return [$this->staticRoutes[$method][$staticKey], []];
+            }
+        }
+
+        // Try dynamic routes
+        if (isset($this->dynamicRoutes[$method])) {
+            foreach ($this->dynamicRoutes[$method] as $route) {
+                if ($route->matches($method, $path, $subdomain)) {
+                    try {
+                        $params = $route->extractParams($path);
+                        return [$route, $params];
+                    } catch (\InvalidArgumentException) {
+                        continue; // Try next route
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Handle no route match
+     */
+    private function handleNoMatch(string $method, string $path, ?string $subdomain): never
+    {
+        // Check if path exists for other methods
+        $availableMethods = $this->getAvailableMethodsForPath($path, $subdomain);
+
+        if (!empty($availableMethods)) {
+            throw new MethodNotAllowedException(
+                "Method {$method} not allowed for path {$path}. Available methods: " . implode(', ', $availableMethods),
+                $availableMethods
+            );
+        }
+
+        throw new RouteNotFoundException("Route not found: {$method} {$path}" .
+            ($subdomain ? " (subdomain: {$subdomain})" : ""));
+    }
+
+    /**
+     * Get available methods for path
+     */
+    private function getAvailableMethodsForPath(string $path, ?string $subdomain): array
+    {
+        $methods = [];
+
+        foreach ($this->routes as $method => $routes) {
+            if ($this->findMatchingRoute($method, $path, $subdomain) !== null) {
+                $methods[] = $method;
+            }
+        }
+
+        return $methods;
+    }
+
+    /**
+     * Cache route match
+     */
+    private function cacheMatch(string $cacheKey, RouteInfo $route, array $params): void
+    {
+        // Limit cache size
+        if (count($this->routeCache) >= $this->maxCacheSize) {
+            // Remove oldest entries (simple FIFO)
+            $this->routeCache = array_slice($this->routeCache, 100, null, true);
+        }
+
+        $this->routeCache[$cacheKey] = [
+            'route' => $route,
+            'params' => $params,
+            'timestamp' => time()
+        ];
+    }
+
+    /**
+     * Generate URL for named route
+     */
+    public function url(string $name, array $params = [], ?string $subdomain = null): string
+    {
+        if (!isset($this->namedRoutes[$name])) {
+            throw new RouteNotFoundException("Named route '{$name}' not found");
+        }
+
+        $route = $this->namedRoutes[$name];
+        $path = $route->originalPath;
+
+        // Replace parameters
+        foreach ($params as $key => $value) {
+            $sanitizedKey = $this->sanitizeParameterKey($key);
+            $sanitizedValue = $this->sanitizeParameterValue($value);
+            $path = str_replace("{{$sanitizedKey}}", $sanitizedValue, $path);
+        }
+
+        // Check for missing parameters
+        if (preg_match('/{[^}]+}/', $path)) {
+            throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
+        }
+
+        // Add subdomain if specified
+        $routeSubdomain = $subdomain ?? $route->subdomain;
+        if ($routeSubdomain !== null) {
+            return $this->buildUrl($routeSubdomain, $path);
+        }
+
+        return $path;
     }
 
     /**
@@ -782,54 +739,91 @@ final class Router
     }
 
     /**
-     * Generate cache key
+     * Check if route exists
      */
-    private function generateCacheKey(string $method, string $path, ?string $subdomain): string
+    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
     {
-        return hash('xxh3', $method . ':' . $path . ':' . ($subdomain ?? ''));
+        $this->compileRoutes();
+
+        $method = strtoupper($method);
+        $path = $this->sanitizePath($path);
+        $subdomain = $this->validateSubdomainInput($subdomain);
+
+        return $this->findMatchingRoute($method, $path, $subdomain) !== null;
     }
 
     /**
-     * Generate static route key
+     * Validate subdomain input and return normalized value
      */
-    private function generateStaticKey(string $path, ?string $subdomain): string
+    private function validateSubdomainInput(?string $subdomain): ?string
     {
-        return $subdomain ? "{$subdomain}:{$path}" : $path;
-    }
-
-    /**
-     * Check if cache entry is valid
-     */
-    private function isCacheValid(array $cachedRoute, Request $request): bool
-    {
-        // Simple validation - could be extended
-        return isset($cachedRoute['route']) && $cachedRoute['route'] instanceof RouteInfo;
-    }
-
-    /**
-     * Cache route match
-     */
-    private function cacheMatch(string $cacheKey, RouteInfo $route, array $params): void
-    {
-        // Limit cache size
-        if (count($this->routeCache) >= $this->maxCacheSize) {
-            // Remove oldest entries (simple FIFO)
-            $this->routeCache = array_slice($this->routeCache, 100, null, true);
+        if ($subdomain === null) {
+            return null;
         }
 
-        $this->routeCache[$cacheKey] = [
-            'route' => $route,
-            'params' => $params,
-            'timestamp' => time()
+        $this->validateSubdomain($subdomain);
+        return $subdomain;
+    }
+
+    /**
+     * Get all registered routes
+     */
+    public function getRoutes(): array
+    {
+        return $this->routes;
+    }
+
+    /**
+     * Get named routes
+     */
+    public function getNamedRoutes(): array
+    {
+        return $this->namedRoutes;
+    }
+
+    /**
+     * Get router statistics
+     */
+    public function getStats(): array
+    {
+        return [
+            'route_count' => $this->routeCount,
+            'static_routes' => $this->staticRouteCount,
+            'dynamic_routes' => $this->dynamicRouteCount,
+            'named_routes' => count($this->namedRoutes),
+            'supported_methods' => $this->supportedMethods,
+            'is_compiled' => $this->isCompiled,
+            'dispatch_count' => $this->dispatchCount,
+            'cache_hits' => $this->cacheHits,
+            'cache_hit_ratio' => $this->dispatchCount > 0
+                ? round(($this->cacheHits / $this->dispatchCount) * 100, 2)
+                : 0,
+            'average_dispatch_time_ms' => $this->dispatchCount > 0
+                ? round($this->totalDispatchTime / $this->dispatchCount, 3)
+                : 0,
+            'cached_routes' => count($this->routeCache),
+            'memory_usage' => memory_get_usage(true),
         ];
     }
 
     /**
-     * Calculate total route count
+     * Warm up router caches
      */
-    private function calculateRouteCount(): int
+    public function warmUp(): void
     {
-        return array_sum(array_map('count', $this->routes));
+        $this->compileRoutes();
+
+        // Pre-cache common paths if available
+        $commonPaths = ['/', '/home', '/about', '/api/health'];
+        foreach ($commonPaths as $path) {
+            foreach ($this->supportedMethods as $method) {
+                try {
+                    $this->findMatchingRoute($method, $path, null);
+                } catch (\Throwable) {
+                    // Ignore errors during warm-up
+                }
+            }
+        }
     }
 
     /**
@@ -927,5 +921,13 @@ final class Router
                     : 0,
             ],
         ];
+    }
+
+    /**
+     * Calculate total route count
+     */
+    private function calculateRouteCount(): int
+    {
+        return array_sum(array_map('count', $this->routes));
     }
 }

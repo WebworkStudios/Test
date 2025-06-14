@@ -1,32 +1,45 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Framework\Container\Psr\ContainerInterface as PsrContainerInterface;
+
 /**
- * Container interface for dependency injection
+ * Extended container interface for dependency injection configuration
+ *
+ * Extends PSR-11 compatible interface with write methods for container setup.
  */
-interface ContainerInterface
+interface ContainerInterface extends PsrContainerInterface
 {
     /**
-     * Get service from container
+     * Bind service to container (fluent interface)
      */
-    public function get(string $id): mixed;
+    public function bind(string $id, mixed $concrete = null, bool $singleton = false): static;
 
     /**
-     * Check if container has service
+     * Bind singleton service to container (fluent interface)
      */
-    public function has(string $id): bool;
+    public function singleton(string $id, mixed $concrete = null): static;
 
     /**
-     * Bind service to container
+     * Register existing instance (fluent interface)
      */
-    public function bind(string $id, mixed $concrete): void;
+    public function instance(string $id, object $instance): static;
 
     /**
-     * Bind singleton service to container
+     * Check if service is registered
      */
-    public function singleton(string $id, mixed $concrete): void;
+    public function isRegistered(string $id): bool;
+
+    /**
+     * Tag service for discovery (fluent interface)
+     */
+    public function tag(string $id, string $tag): static;
+
+    /**
+     * Register lazy service (fluent interface)
+     */
+    public function lazy(string $id, callable $factory, bool $singleton = true): static;
 }

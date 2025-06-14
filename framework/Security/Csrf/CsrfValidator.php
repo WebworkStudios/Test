@@ -17,6 +17,19 @@ final readonly class CsrfValidator
     }
 
     /**
+     * Validate and consume token in one operation
+     */
+    public function validateAndConsume(string $token, string $action): bool
+    {
+        if ($this->validate($token, $action, true)) {
+            $this->tokenManager->markUsed($action);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Validate token with timing-safe comparison
      */
     public function validate(string $token, string $action, bool $oneTime = true): bool
@@ -38,19 +51,6 @@ final readonly class CsrfValidator
         }
 
         return true;
-    }
-
-    /**
-     * Validate and consume token in one operation
-     */
-    public function validateAndConsume(string $token, string $action): bool
-    {
-        if ($this->validate($token, $action, true)) {
-            $this->tokenManager->markUsed($action);
-            return true;
-        }
-
-        return false;
     }
 
     /**

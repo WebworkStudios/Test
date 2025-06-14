@@ -11,8 +11,16 @@ use framework\Http\Session\SessionInterface;
  */
 final class CsrfProtection implements CsrfProtectionInterface
 {
+    public string $defaultToken {
+        get => $this->token('default');
+    }
+    public bool $hasTokens {
+        get => !empty($this->tokenManager->getAll());
+    }
     private readonly CsrfTokenManager $tokenManager;
     private readonly CsrfValidator $validator;
+
+    // Property Hooks
     private readonly CsrfHtmlGenerator $htmlGenerator;
 
     public function __construct(SessionInterface $session)
@@ -20,15 +28,6 @@ final class CsrfProtection implements CsrfProtectionInterface
         $this->tokenManager = new CsrfTokenManager($session);
         $this->validator = new CsrfValidator($this->tokenManager);
         $this->htmlGenerator = new CsrfHtmlGenerator($this->tokenManager);
-    }
-
-    // Property Hooks
-    public string $defaultToken {
-        get => $this->token('default');
-    }
-
-    public bool $hasTokens {
-        get => !empty($this->tokenManager->getAll());
     }
 
     // === Token Management ===
@@ -63,9 +62,10 @@ final class CsrfProtection implements CsrfProtectionInterface
 
     public function validateFromRequest(
         \Framework\Http\Request $request,
-        ?string $action = 'default',
-        bool $consume = true
-    ): bool {
+        ?string                 $action = 'default',
+        bool                    $consume = true
+    ): bool
+    {
         return $this->validator->validateFromRequest($request, $action ?? 'default', $consume);
     }
 

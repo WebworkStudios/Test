@@ -1,6 +1,7 @@
 # PHP 8.4 Router Framework
 
-A high-performance, feature-rich HTTP routing system built specifically for PHP 8.4, leveraging the latest language features including Property Hooks, Asymmetric Visibility, and modern attribute-based route definitions.
+A high-performance, feature-rich HTTP routing system built specifically for PHP 8.4, leveraging the latest language
+features including Property Hooks, Asymmetric Visibility, and modern attribute-based route definitions.
 
 ## Table of Contents
 
@@ -24,6 +25,7 @@ A high-performance, feature-rich HTTP routing system built specifically for PHP 
 ## Features
 
 ### Core Features
+
 - **PHP 8.4 Property Hooks** - Computed properties for real-time metrics
 - **Attribute-based routing** - Modern, declarative route definitions
 - **High-performance caching** - Multi-layer caching with integrity checks
@@ -34,6 +36,7 @@ A high-performance, feature-rich HTTP routing system built specifically for PHP 
 - **Named routes** - URL generation and reverse routing
 
 ### Performance Features
+
 - **Static route optimization** - O(1) lookup for static routes
 - **Dynamic route compilation** - Optimized pattern matching
 - **Memory-efficient caching** - LRU cache with size limits
@@ -42,6 +45,7 @@ A high-performance, feature-rich HTTP routing system built specifically for PHP 
 - **Integrity checking** - SHA-256 verification for cache files
 
 ### Security Features
+
 - **Path traversal protection** - Secure file operations
 - **Input validation** - Comprehensive parameter sanitization
 - **XSS prevention** - Safe parameter handling
@@ -716,6 +720,7 @@ print_r($debug);
 ```
 
 Debug output:
+
 ```php
 [
     'method' => 'GET',
@@ -903,7 +908,8 @@ if (!$debugMode) {
 
 #### Methods
 
-- `addRoute(string $method, string $path, string $actionClass, array $middleware = [], ?string $name = null, ?string $subdomain = null): void`
+-
+`addRoute(string $method, string $path, string $actionClass, array $middleware = [], ?string $name = null, ?string $subdomain = null): void`
 - `dispatch(Request $request): Response`
 - `url(string $name, array $params = [], ?string $subdomain = null): string`
 - `hasRoute(string $method, string $path, ?string $subdomain = null): bool`
@@ -964,6 +970,7 @@ if (!$debugMode) {
 
 ---
 
-**Note**: This framework requires PHP 8.4 and makes extensive use of the latest language features. For older PHP versions, consider using alternative routing solutions.
+**Note**: This framework requires PHP 8.4 and makes extensive use of the latest language features. For older PHP
+versions, consider using alternative routing solutions.
 
 For more examples and advanced usage, please refer to the `/examples` directory in the repository.

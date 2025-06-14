@@ -4,13 +4,12 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
-use Framework\Container\Attributes\{Service, Factory};
-use Framework\Container\SecurityValidator;
-use ReflectionClass;
-use ReflectionMethod;
+use Framework\Container\Attributes\{Factory, Service};
+use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use RecursiveCallbackFilterIterator;
+use ReflectionClass;
+use ReflectionMethod;
 
 /**
  * Optimized service discovery with PHP 8.4 features and simplified architecture
@@ -46,12 +45,13 @@ final class ServiceDiscovery
 
     public function __construct(
         private readonly Container $container,
-        private readonly array $ignoredDirectories = [
+        private readonly array     $ignoredDirectories = [
             'vendor', 'node_modules', '.git', 'storage', 'cache', 'tests',
             'build', 'dist', 'coverage', '.idea', '.vscode', 'tmp', 'temp'
         ],
-        private readonly array $config = []
-    ) {
+        private readonly array     $config = []
+    )
+    {
         $this->validateConfiguration();
         $this->securityValidator = new SecurityValidator(
             strictMode: $this->strictMode,
@@ -60,11 +60,142 @@ final class ServiceDiscovery
     }
 
     /**
+     * Validate configuration
+     */
+    private function validateConfiguration(): void
+    {
+        if ($this->maxDepth < 1 || $this->maxDepth > 20) {
+            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
+        }
+
+        // Validate ignored directories
+        foreach ($this->ignoredDirectories as $dir) {
+            if (!is_string($dir) || strlen($dir) > 100) {
+                throw new \InvalidArgumentException('Invalid ignored directory specification');
+            }
+        }
+    }
+
+    /**
+     * Get allowed paths for security validator
+     */
+    private function getAllowedPaths(): array
+    {
+        return [
+            getcwd(),
+            getcwd() . '/app',
+            getcwd() . '/src',
+            getcwd() . '/modules'
+        ];
+    }
+
+    /**
      * Create with default configuration
      */
     public static function create(Container $container, array $config = []): self
     {
         return new self($container, config: $config);
+    }
+
+    /**
+     * Check if class has service attributes
+     */
+    public function hasServiceAttributes(string $className): bool
+    {
+        if (!class_exists($className)) {
+            return false;
+        }
+
+        try {
+            $reflection = new ReflectionClass($className);
+
+            // Check for Service attribute
+            if (!empty($reflection->getAttributes(Service::class))) {
+                return true;
+            }
+
+            // Check for Factory methods
+            return $this->hasFactoryMethods($reflection);
+
+        } catch (\ReflectionException) {
+            return false;
+        }
+    }
+
+    /**
+     * Check if class has factory methods
+     */
+    private function hasFactoryMethods(ReflectionClass $reflection): bool
+    {
+        $methods = $reflection->getMethods(ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PUBLIC);
+
+        foreach ($methods as $method) {
+            if (!empty($method->getAttributes(Factory::class))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get discovery statistics
+     */
+    public function getStats(): array
+    {
+        return [
+            'processed_files' => $this->processedFiles,
+            'discovered_services' => $this->discoveredServices,
+            'cached_classes' => count($this->classCache),
+            'successful_classes' => count(array_filter($this->classCache)),
+            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
+            'success_rate' => $this->successRate,
+            'memory_usage' => memory_get_usage(true),
+            'peak_memory' => memory_get_peak_usage(true),
+            'strict_mode' => $this->strictMode,
+            'max_depth' => $this->maxDepth,
+        ];
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCache(): void
+    {
+        $this->classCache = [];
+        $this->resetCounters();
+    }
+
+    /**
+     * Reset performance counters
+     */
+    private function resetCounters(): void
+    {
+        $this->processedFiles = 0;
+        $this->discoveredServices = 0;
+    }
+
+    /**
+     * Auto-discover with default paths
+     */
+    public function autoDiscover(): void
+    {
+        $defaultPaths = [
+            'app/Services',
+            'app/Repositories',
+            'app/Handlers',
+            'app/Providers',
+            'src/Services',
+            'src/Domain'
+        ];
+
+        $existingPaths = array_filter($defaultPaths, 'is_dir');
+
+        if (empty($existingPaths)) {
+            throw new \RuntimeException('No default discovery paths found');
+        }
+
+        $this->discover($existingPaths);
     }
 
     /**
@@ -77,6 +208,34 @@ final class ServiceDiscovery
 
         foreach ($directories as $directory) {
             $this->scanDirectory($directory);
+        }
+    }
+
+    /**
+     * Validate directories input
+     */
+    private function validateDirectories(array $directories): void
+    {
+        if (empty($directories)) {
+            throw new \InvalidArgumentException('At least one directory must be specified');
+        }
+
+        if (count($directories) > 20) {
+            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
+        }
+
+        foreach ($directories as $directory) {
+            if (!is_string($directory)) {
+                throw new \InvalidArgumentException('Directory must be a string');
+            }
+
+            if (strlen($directory) > 500) {
+                throw new \InvalidArgumentException('Directory path too long');
+            }
+
+            if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
+                throw new \InvalidArgumentException('Directory path contains invalid characters');
+            }
         }
     }
 
@@ -112,6 +271,24 @@ final class ServiceDiscovery
                 throw $e;
             }
             error_log("Error scanning directory {$directory}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Process glob pattern
+     */
+    private function processGlobPattern(string $pattern): void
+    {
+        $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
+        if ($matches === false) {
+            return;
+        }
+
+        // Limit number of directories
+        $matches = array_slice($matches, 0, 50);
+
+        foreach ($matches as $match) {
+            $this->scanDirectory($match);
         }
     }
 
@@ -294,84 +471,6 @@ final class ServiceDiscovery
     }
 
     /**
-     * Create file filter for iterator
-     */
-    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
-    {
-        $filename = $file->getFilename();
-
-        // Fast exclusion checks
-        if (str_starts_with($filename, '.') ||
-            str_starts_with($filename, '_') ||
-            str_starts_with($filename, '#')) {
-            return false;
-        }
-
-        if ($file->isDir()) {
-            return $this->isAllowedDirectory($filename);
-        }
-
-        // File validation
-        return $file->getExtension() === 'php' &&
-            $file->isReadable() &&
-            $file->getSize() > 0 &&
-            $file->getSize() <= 2097152; // 2MB limit
-    }
-
-    /**
-     * Check if directory is allowed
-     */
-    private function isAllowedDirectory(string $dirname): bool
-    {
-        $lowerName = strtolower($dirname);
-
-        // Check ignored directories
-        if (in_array($lowerName, array_map('strtolower', $this->ignoredDirectories), true)) {
-            return false;
-        }
-
-        // Additional security checks
-        $dangerousDirs = ['tmp', 'temp', 'log', 'logs', 'backup', 'backups'];
-        if (in_array($lowerName, $dangerousDirs, true)) {
-            return false;
-        }
-
-        return $this->isSecureDirectoryName($dirname);
-    }
-
-    /**
-     * Check if directory name is secure
-     */
-    private function isSecureDirectoryName(string $dirname): bool
-    {
-        // Dangerous directory names
-        $dangerous = [
-            'bin', 'sbin', 'etc', 'proc', 'dev', 'sys',
-            'admin', 'config', 'secret', 'private', 'hidden'
-        ];
-
-        return !in_array(strtolower($dirname), $dangerous, true);
-    }
-
-    /**
-     * Process glob pattern
-     */
-    private function processGlobPattern(string $pattern): void
-    {
-        $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
-        if ($matches === false) {
-            return;
-        }
-
-        // Limit number of directories
-        $matches = array_slice($matches, 0, 50);
-
-        foreach ($matches as $match) {
-            $this->scanDirectory($match);
-        }
-    }
-
-    /**
      * Register discovered class with container
      */
     public function registerClass(string $className): void
@@ -542,7 +641,7 @@ final class ServiceDiscovery
                     $options = $factory->getRegistrationOptions();
 
                     // Create factory closure
-                    $factoryClosure = function(Container $container) use ($reflection, $method, $options) {
+                    $factoryClosure = function (Container $container) use ($reflection, $method, $options) {
                         return $method->invoke(null, $container, ...array_values($options['parameters']));
                     };
 
@@ -573,118 +672,6 @@ final class ServiceDiscovery
     }
 
     /**
-     * Check if class has factory methods
-     */
-    private function hasFactoryMethods(ReflectionClass $reflection): bool
-    {
-        $methods = $reflection->getMethods(ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PUBLIC);
-
-        foreach ($methods as $method) {
-            if (!empty($method->getAttributes(Factory::class))) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Discover services in specific files
-     */
-    public function discoverInFiles(array $filePaths): void
-    {
-        $this->validateFilePaths($filePaths);
-        $this->resetCounters();
-
-        $this->processBatch($filePaths);
-    }
-
-    /**
-     * Check if class has service attributes
-     */
-    public function hasServiceAttributes(string $className): bool
-    {
-        if (!class_exists($className)) {
-            return false;
-        }
-
-        try {
-            $reflection = new ReflectionClass($className);
-
-            // Check for Service attribute
-            if (!empty($reflection->getAttributes(Service::class))) {
-                return true;
-            }
-
-            // Check for Factory methods
-            return $this->hasFactoryMethods($reflection);
-
-        } catch (\ReflectionException) {
-            return false;
-        }
-    }
-
-    /**
-     * Get discovery statistics
-     */
-    public function getStats(): array
-    {
-        return [
-            'processed_files' => $this->processedFiles,
-            'discovered_services' => $this->discoveredServices,
-            'cached_classes' => count($this->classCache),
-            'successful_classes' => count(array_filter($this->classCache)),
-            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
-            'success_rate' => $this->successRate,
-            'memory_usage' => memory_get_usage(true),
-            'peak_memory' => memory_get_peak_usage(true),
-            'strict_mode' => $this->strictMode,
-            'max_depth' => $this->maxDepth,
-        ];
-    }
-
-    /**
-     * Clear all caches
-     */
-    public function clearCache(): void
-    {
-        $this->classCache = [];
-        $this->resetCounters();
-    }
-
-    /**
-     * Reset performance counters
-     */
-    private function resetCounters(): void
-    {
-        $this->processedFiles = 0;
-        $this->discoveredServices = 0;
-    }
-
-    /**
-     * Auto-discover with default paths
-     */
-    public function autoDiscover(): void
-    {
-        $defaultPaths = [
-            'app/Services',
-            'app/Repositories',
-            'app/Handlers',
-            'app/Providers',
-            'src/Services',
-            'src/Domain'
-        ];
-
-        $existingPaths = array_filter($defaultPaths, 'is_dir');
-
-        if (empty($existingPaths)) {
-            throw new \RuntimeException('No default discovery paths found');
-        }
-
-        $this->discover($existingPaths);
-    }
-
-    /**
      * Discover services with pattern matching
      */
     public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Service,Repository,Handler}.php'): void
@@ -708,63 +695,14 @@ final class ServiceDiscovery
     }
 
     /**
-     * Get allowed paths for security validator
+     * Discover services in specific files
      */
-    private function getAllowedPaths(): array
+    public function discoverInFiles(array $filePaths): void
     {
-        return [
-            getcwd(),
-            getcwd() . '/app',
-            getcwd() . '/src',
-            getcwd() . '/modules'
-        ];
-    }
+        $this->validateFilePaths($filePaths);
+        $this->resetCounters();
 
-    // === Validation Methods ===
-
-    /**
-     * Validate configuration
-     */
-    private function validateConfiguration(): void
-    {
-        if ($this->maxDepth < 1 || $this->maxDepth > 20) {
-            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
-        }
-
-        // Validate ignored directories
-        foreach ($this->ignoredDirectories as $dir) {
-            if (!is_string($dir) || strlen($dir) > 100) {
-                throw new \InvalidArgumentException('Invalid ignored directory specification');
-            }
-        }
-    }
-
-    /**
-     * Validate directories input
-     */
-    private function validateDirectories(array $directories): void
-    {
-        if (empty($directories)) {
-            throw new \InvalidArgumentException('At least one directory must be specified');
-        }
-
-        if (count($directories) > 20) {
-            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
-        }
-
-        foreach ($directories as $directory) {
-            if (!is_string($directory)) {
-                throw new \InvalidArgumentException('Directory must be a string');
-            }
-
-            if (strlen($directory) > 500) {
-                throw new \InvalidArgumentException('Directory path too long');
-            }
-
-            if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
-                throw new \InvalidArgumentException('Directory path contains invalid characters');
-            }
-        }
+        $this->processBatch($filePaths);
     }
 
     /**
@@ -794,6 +732,8 @@ final class ServiceDiscovery
             }
         }
     }
+
+    // === Validation Methods ===
 
     /**
      * Get discovered services summary
@@ -825,5 +765,65 @@ final class ServiceDiscovery
             'max_depth' => $this->maxDepth,
             'has_security_validator' => true
         ];
+    }
+
+    /**
+     * Create file filter for iterator
+     */
+    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
+    {
+        $filename = $file->getFilename();
+
+        // Fast exclusion checks
+        if (str_starts_with($filename, '.') ||
+            str_starts_with($filename, '_') ||
+            str_starts_with($filename, '#')) {
+            return false;
+        }
+
+        if ($file->isDir()) {
+            return $this->isAllowedDirectory($filename);
+        }
+
+        // File validation
+        return $file->getExtension() === 'php' &&
+            $file->isReadable() &&
+            $file->getSize() > 0 &&
+            $file->getSize() <= 2097152; // 2MB limit
+    }
+
+    /**
+     * Check if directory is allowed
+     */
+    private function isAllowedDirectory(string $dirname): bool
+    {
+        $lowerName = strtolower($dirname);
+
+        // Check ignored directories
+        if (in_array($lowerName, array_map('strtolower', $this->ignoredDirectories), true)) {
+            return false;
+        }
+
+        // Additional security checks
+        $dangerousDirs = ['tmp', 'temp', 'log', 'logs', 'backup', 'backups'];
+        if (in_array($lowerName, $dangerousDirs, true)) {
+            return false;
+        }
+
+        return $this->isSecureDirectoryName($dirname);
+    }
+
+    /**
+     * Check if directory name is secure
+     */
+    private function isSecureDirectoryName(string $dirname): bool
+    {
+        // Dangerous directory names
+        $dangerous = [
+            'bin', 'sbin', 'etc', 'proc', 'dev', 'sys',
+            'admin', 'config', 'secret', 'private', 'hidden'
+        ];
+
+        return !in_array(strtolower($dirname), $dangerous, true);
     }
 }

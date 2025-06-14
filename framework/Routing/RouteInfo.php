@@ -43,6 +43,58 @@ final class RouteInfo
     }
 
     /**
+     * Validate construction parameters
+     */
+    private function validateConstruction(): void
+    {
+        // Validate method
+        $allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+        if (!in_array($this->method, $allowedMethods, true)) {
+            throw new \InvalidArgumentException("Invalid HTTP method: {$this->method}");
+        }
+
+        // Validate path
+        if (!str_starts_with($this->originalPath, '/')) {
+            throw new \InvalidArgumentException("Path must start with /");
+        }
+
+        if (strlen($this->originalPath) > 2048) {
+            throw new \InvalidArgumentException("Path too long");
+        }
+
+        // Validate action class
+        if (!class_exists($this->actionClass)) {
+            throw new \InvalidArgumentException("Action class does not exist: {$this->actionClass}");
+        }
+
+        // Validate middleware
+        if (count($this->middleware) > 10) {
+            throw new \InvalidArgumentException("Too many middleware (max 10)");
+        }
+
+        foreach ($this->middleware as $mw) {
+            if (!is_string($mw) || strlen($mw) > 100) {
+                throw new \InvalidArgumentException("Invalid middleware specification");
+            }
+        }
+
+        // Validate name
+        if ($this->name !== null) {
+            if (strlen($this->name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $this->name)) {
+                throw new \InvalidArgumentException("Invalid route name: {$this->name}");
+            }
+        }
+
+        // Validate subdomain
+        if ($this->subdomain !== null) {
+            if (strlen($this->subdomain) > 63 ||
+                !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $this->subdomain)) {
+                throw new \InvalidArgumentException("Invalid subdomain: {$this->subdomain}");
+            }
+        }
+    }
+
+    /**
      * Create RouteInfo from path
      */
     public static function fromPath(
@@ -73,52 +125,6 @@ final class RouteInfo
     }
 
     /**
-     * Check if route matches request
-     */
-    public function matches(string $method, string $path, ?string $subdomain = null): bool
-    {
-        // Method check
-        if ($this->method !== strtoupper($method)) {
-            return false;
-        }
-
-        // Subdomain check
-        if ($this->subdomain !== $subdomain) {
-            return false;
-        }
-
-        // Static route exact match
-        if ($this->isStatic) {
-            return $this->originalPath === $path;
-        }
-
-        // Dynamic route pattern match
-        return preg_match($this->pattern, $path) === 1;
-    }
-
-    /**
-     * Extract parameters from path
-     */
-    public function extractParams(string $path): array
-    {
-        if ($this->isStatic || empty($this->paramNames)) {
-            return [];
-        }
-
-        if (!preg_match($this->pattern, $path, $matches)) {
-            throw new \InvalidArgumentException("Path does not match route pattern");
-        }
-
-        $params = [];
-        foreach ($this->paramNames as $index => $name) {
-            $value = $matches[$index + 1] ?? '';
-            $params[$name] = $this->sanitizeParameterValue($value);
-        }
-
-        return $params;
-    }
-
-    /**
      * Compile path pattern to regex
      */
     private static function compilePattern(string $path): string
@@ -126,7 +132,7 @@ final class RouteInfo
         // Replace placeholders with regex patterns first
         $pattern = preg_replace_callback(
             '/{([^}]+)}/',  // ✅ Kein Escaping nötig
-            function($matches) {
+            function ($matches) {
                 $paramName = $matches[1];
 
                 // Check for parameter constraints
@@ -189,6 +195,71 @@ final class RouteInfo
 
         return $paramNames;
     }
+
+    /**
+     * Create from array (for unserialization)
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            $data['method'],
+            $data['original_path'],
+            $data['pattern'],
+            $data['param_names'] ?? [],
+            $data['action_class'],
+            $data['middleware'] ?? [],
+            $data['name'] ?? null,
+            $data['subdomain'] ?? null,
+            $data['options'] ?? []
+        );
+    }
+
+    /**
+     * Check if route matches request
+     */
+    public function matches(string $method, string $path, ?string $subdomain = null): bool
+    {
+        // Method check
+        if ($this->method !== strtoupper($method)) {
+            return false;
+        }
+
+        // Subdomain check
+        if ($this->subdomain !== $subdomain) {
+            return false;
+        }
+
+        // Static route exact match
+        if ($this->isStatic) {
+            return $this->originalPath === $path;
+        }
+
+        // Dynamic route pattern match
+        return preg_match($this->pattern, $path) === 1;
+    }
+
+    /**
+     * Extract parameters from path
+     */
+    public function extractParams(string $path): array
+    {
+        if ($this->isStatic || empty($this->paramNames)) {
+            return [];
+        }
+
+        if (!preg_match($this->pattern, $path, $matches)) {
+            throw new \InvalidArgumentException("Path does not match route pattern");
+        }
+
+        $params = [];
+        foreach ($this->paramNames as $index => $name) {
+            $value = $matches[$index + 1] ?? '';
+            $params[$name] = $this->sanitizeParameterValue($value);
+        }
+
+        return $params;
+    }
+
     /**
      * Sanitize parameter value
      */
@@ -203,58 +274,6 @@ final class RouteInfo
         }
 
         return $value;
-    }
-
-    /**
-     * Validate construction parameters
-     */
-    private function validateConstruction(): void
-    {
-        // Validate method
-        $allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
-        if (!in_array($this->method, $allowedMethods, true)) {
-            throw new \InvalidArgumentException("Invalid HTTP method: {$this->method}");
-        }
-
-        // Validate path
-        if (!str_starts_with($this->originalPath, '/')) {
-            throw new \InvalidArgumentException("Path must start with /");
-        }
-
-        if (strlen($this->originalPath) > 2048) {
-            throw new \InvalidArgumentException("Path too long");
-        }
-
-        // Validate action class
-        if (!class_exists($this->actionClass)) {
-            throw new \InvalidArgumentException("Action class does not exist: {$this->actionClass}");
-        }
-
-        // Validate middleware
-        if (count($this->middleware) > 10) {
-            throw new \InvalidArgumentException("Too many middleware (max 10)");
-        }
-
-        foreach ($this->middleware as $mw) {
-            if (!is_string($mw) || strlen($mw) > 100) {
-                throw new \InvalidArgumentException("Invalid middleware specification");
-            }
-        }
-
-        // Validate name
-        if ($this->name !== null) {
-            if (strlen($this->name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $this->name)) {
-                throw new \InvalidArgumentException("Invalid route name: {$this->name}");
-            }
-        }
-
-        // Validate subdomain
-        if ($this->subdomain !== null) {
-            if (strlen($this->subdomain) > 63 ||
-                !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $this->subdomain)) {
-                throw new \InvalidArgumentException("Invalid subdomain: {$this->subdomain}");
-            }
-        }
     }
 
     /**
@@ -275,14 +294,6 @@ final class RouteInfo
         }
 
         return $url;
-    }
-
-    /**
-     * Check if route has specific middleware
-     */
-    public function hasMiddleware(string $middleware): bool
-    {
-        return in_array($middleware, $this->middleware, true);
     }
 
     /**
@@ -319,6 +330,14 @@ final class RouteInfo
     }
 
     /**
+     * Check if route has specific middleware
+     */
+    public function hasMiddleware(string $middleware): bool
+    {
+        return in_array($middleware, $this->middleware, true);
+    }
+
+    /**
      * Get route description
      */
     public function getDescription(): ?string
@@ -344,24 +363,6 @@ final class RouteInfo
             'is_static' => $this->isStatic,
             'parameter_count' => $this->parameterCount,
         ];
-    }
-
-    /**
-     * Create from array (for unserialization)
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            $data['method'],
-            $data['original_path'],
-            $data['pattern'],
-            $data['param_names'] ?? [],
-            $data['action_class'],
-            $data['middleware'] ?? [],
-            $data['name'] ?? null,
-            $data['subdomain'] ?? null,
-            $data['options'] ?? []
-        );
     }
 
     /**
