@@ -40,8 +40,6 @@ final class RouteDiscovery
     }
 
     private array $classCache = [];
-    private int $processedFiles = 0;
-    private int $discoveredRoutes = 0;
 
     private readonly SecurityValidator $securityValidator;
 
@@ -188,8 +186,8 @@ final class RouteDiscovery
             return [];
         }
 
-        // Fast pre-screening
-        if (!$this->hasRouteAttributes($content)) {
+        // Fast pre-screening - Methodenaufruf angepasst
+        if (!$this->contentHasRouteAttributes($content)) {
             return [];
         }
 
@@ -218,9 +216,9 @@ final class RouteDiscovery
     }
 
     /**
-     * Fast check for route attributes
+     * Fast check for route attributes in content
      */
-    private function hasRouteAttributes(string $content): bool
+    private function contentHasRouteAttributes(string $content): bool
     {
         return str_contains($content, '#[Route') ||
             str_contains($content, 'Route(') ||
