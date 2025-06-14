@@ -2,19 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Framework\Routing;
+namespace Framework\Container;
 
-use Framework\Routing\Attributes\Route;
+use Framework\Container\Attributes\{Service, Factory};
 use Framework\Container\SecurityValidator;
 use ReflectionClass;
+use ReflectionMethod;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RecursiveCallbackFilterIterator;
 
 /**
- * Optimized route discovery with PHP 8.4 features and simplified architecture
+ * Optimized service discovery with PHP 8.4 features and simplified architecture
  */
-final class RouteDiscovery
+final class ServiceDiscovery
 {
     // PHP 8.4 Property Hooks for computed properties
     public int $maxDepth {
@@ -29,8 +30,8 @@ final class RouteDiscovery
         get => $this->processedFiles;
     }
 
-    public int $discoveredRoutes {
-        get => $this->discoveredRoutes;
+    public int $discoveredServices {
+        get => $this->discoveredServices;
     }
 
     public float $successRate {
@@ -44,7 +45,7 @@ final class RouteDiscovery
     private readonly SecurityValidator $securityValidator;
 
     public function __construct(
-        private readonly Router $router,
+        private readonly Container $container,
         private readonly array $ignoredDirectories = [
             'vendor', 'node_modules', '.git', 'storage', 'cache', 'tests',
             'build', 'dist', 'coverage', '.idea', '.vscode', 'tmp', 'temp'
@@ -61,13 +62,13 @@ final class RouteDiscovery
     /**
      * Create with default configuration
      */
-    public static function create(Router $router, array $config = []): self
+    public static function create(Container $container, array $config = []): self
     {
-        return new self($router, config: $config);
+        return new self($container, config: $config);
     }
 
     /**
-     * Discover routes in specified directories
+     * Discover services in specified directories
      */
     public function discover(array $directories): void
     {
@@ -80,7 +81,7 @@ final class RouteDiscovery
     }
 
     /**
-     * Scan single directory for routes
+     * Scan single directory for services
      */
     private function scanDirectory(string $directory): void
     {
@@ -173,7 +174,7 @@ final class RouteDiscovery
     }
 
     /**
-     * Scan single file for route classes
+     * Scan single file for service classes
      */
     private function scanFile(string $filePath): array
     {
@@ -186,8 +187,8 @@ final class RouteDiscovery
             return [];
         }
 
-        // Fast pre-screening - Methodenaufruf angepasst
-        if (!$this->contentHasRouteAttributes($content)) {
+        // Fast pre-screening - umbenennen
+        if (!$this->hasServiceAttributesInContent($content)) {
             return [];
         }
 
@@ -216,13 +217,15 @@ final class RouteDiscovery
     }
 
     /**
-     * Fast check for route attributes in content
+     * Fast check for service attributes in file content
      */
-    private function contentHasRouteAttributes(string $content): bool
+    private function hasServiceAttributesInContent(string $content): bool
     {
-        return str_contains($content, '#[Route') ||
-            str_contains($content, 'Route(') ||
-            preg_match('/#\[Route\s*\(/', $content) === 1;
+        return str_contains($content, '#[Service') ||
+            str_contains($content, '#[Factory') ||
+            str_contains($content, 'Service(') ||
+            str_contains($content, 'Factory(') ||
+            preg_match('/#\[(Service|Factory)\s*\(/', $content) === 1;
     }
 
     /**
@@ -265,38 +268,24 @@ final class RouteDiscovery
     }
 
     /**
-     * Check if class is allowed for route discovery
+     * Check if class is allowed for service discovery
      */
     private function isAllowedClass(string $fullClassName): bool
     {
-        // Allowed namespaces for route classes
+        // Allowed namespaces for service classes
         $allowedNamespaces = [
-            'App\\Actions\\',
-            'App\\Controllers\\',
-            'App\\Http\\Actions\\',
-            'App\\Http\\Controllers\\',
-            'App\\Api\\',
-            'Modules\\'
+            'App\\Services\\',
+            'App\\Repositories\\',
+            'App\\Handlers\\',
+            'App\\Providers\\',
+            'App\\Domain\\',
+            'Modules\\',
+            'Framework\\',
+            'Infrastructure\\'
         ];
 
-        $hasValidNamespace = false;
         foreach ($allowedNamespaces as $namespace) {
             if (str_starts_with($fullClassName, $namespace)) {
-                $hasValidNamespace = true;
-                break;
-            }
-        }
-
-        if (!$hasValidNamespace) {
-            return false;
-        }
-
-        // Check class name suffixes
-        $className = basename(str_replace('\\', '/', $fullClassName));
-        $allowedSuffixes = ['Action', 'Controller', 'Handler'];
-
-        foreach ($allowedSuffixes as $suffix) {
-            if (str_ends_with($className, $suffix)) {
                 return true;
             }
         }
@@ -383,7 +372,7 @@ final class RouteDiscovery
     }
 
     /**
-     * Register discovered class with router
+     * Register discovered class with container
      */
     public function registerClass(string $className): void
     {
@@ -406,8 +395,19 @@ final class RouteDiscovery
                 return;
             }
 
-            $this->processRouteAttributes($reflection);
-            $this->classCache[$className] = true;
+            $registered = false;
+
+            // Process Service attributes
+            $registered |= $this->processServiceAttributes($reflection);
+
+            // Process Factory methods
+            $registered |= $this->processFactoryMethods($reflection);
+
+            $this->classCache[$className] = $registered;
+
+            if ($registered) {
+                $this->discoveredServices++;
+            }
 
         } catch (\Throwable $e) {
             $this->classCache[$className] = false;
@@ -435,13 +435,13 @@ final class RouteDiscovery
         try {
             $reflection = new ReflectionClass($className);
 
-            // Must be invokable (have __invoke method)
-            if (!$reflection->hasMethod('__invoke')) {
-                return false;
+            // Abstract classes are only valid if they have factory methods
+            if ($reflection->isAbstract()) {
+                return $this->hasFactoryMethods($reflection);
             }
 
-            $invokeMethod = $reflection->getMethod('__invoke');
-            if (!$this->securityValidator->isMethodSafe($invokeMethod)) {
+            // Interface classes are not valid for service discovery
+            if ($reflection->isInterface()) {
                 return false;
             }
 
@@ -457,62 +457,139 @@ final class RouteDiscovery
     }
 
     /**
-     * Process route attributes for class
+     * Process service attributes for class
      */
-    private function processRouteAttributes(ReflectionClass $reflection): void
+    private function processServiceAttributes(ReflectionClass $reflection): bool
     {
-        $attributes = $reflection->getAttributes(Route::class);
+        $attributes = $reflection->getAttributes(Service::class);
+
+        if (empty($attributes)) {
+            return false;
+        }
 
         foreach ($attributes as $attribute) {
             try {
-                /** @var Route $route */
-                $route = $attribute->newInstance();
+                /** @var Service $service */
+                $service = $attribute->newInstance();
 
-                // Register main route
-                $this->registerRoute($route, $reflection->getName());
-
-                // Register additional methods if specified
-                foreach ($route->methods as $additionalMethod) {
-                    $additionalRoute = new Route(
-                        $additionalMethod,
-                        $route->path,
-                        $route->middleware,
-                        $route->name ? $route->name . '.' . strtolower($additionalMethod) : null,
-                        $route->subdomain,
-                        $route->options,
-                        $route->schemes
-                    );
-                    $this->registerRoute($additionalRoute, $reflection->getName());
+                // Check if service should be registered
+                if (!$service->shouldRegister($this->container->config)) {
+                    continue;
                 }
 
-                $this->discoveredRoutes++;
+                $serviceId = $service->getServiceId($reflection->getName());
+                $options = $service->getRegistrationOptions();
+
+                // Register service
+                if ($options['lazy']) {
+                    $this->container->lazy($serviceId, fn() => new ($reflection->getName()), $options['singleton']);
+                } else {
+                    $this->container->bind($serviceId, $reflection->getName(), $options['singleton']);
+                }
+
+                // Add tags
+                foreach ($options['tags'] as $tag) {
+                    $this->container->tag($serviceId, $tag);
+                }
+
+                // Register interfaces
+                foreach ($options['interfaces'] as $interface) {
+                    if ($reflection->implementsInterface($interface)) {
+                        $this->container->bind($interface, $serviceId, $options['singleton']);
+                    }
+                }
+
+                return true;
 
             } catch (\Throwable $e) {
                 if ($this->strictMode) {
                     throw $e;
                 }
-                error_log("Failed to process route for {$reflection->getName()}: " . $e->getMessage());
+                error_log("Failed to process service attribute for {$reflection->getName()}: " . $e->getMessage());
             }
         }
+
+        return false;
     }
 
     /**
-     * Register single route with router
+     * Process factory methods for class
      */
-    private function registerRoute(Route $route, string $actionClass): void
+    private function processFactoryMethods(ReflectionClass $reflection): bool
     {
-        $this->router->addRoute(
-            $route->method,
-            $route->path,
-            $actionClass,
-            $route->middleware,
-            $route->name,
-            $route->subdomain
-        );
+        $methods = $reflection->getMethods(ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PUBLIC);
+        $registered = false;
+
+        foreach ($methods as $method) {
+            $attributes = $method->getAttributes(Factory::class);
+
+            foreach ($attributes as $attribute) {
+                try {
+                    /** @var Factory $factory */
+                    $factory = $attribute->newInstance();
+
+                    // Validate factory method
+                    if (!$factory->validateMethod($method)) {
+                        continue;
+                    }
+
+                    // Check if factory should be registered
+                    if (!$factory->shouldRegister($this->container->config)) {
+                        continue;
+                    }
+
+                    $serviceId = $factory->getServiceId();
+                    $options = $factory->getRegistrationOptions();
+
+                    // Create factory closure
+                    $factoryClosure = function(Container $container) use ($reflection, $method, $options) {
+                        return $method->invoke(null, $container, ...array_values($options['parameters']));
+                    };
+
+                    // Register factory
+                    if ($options['lazy']) {
+                        $this->container->lazy($serviceId, $factoryClosure, $options['singleton']);
+                    } else {
+                        $this->container->bind($serviceId, $factoryClosure, $options['singleton']);
+                    }
+
+                    // Add tags
+                    foreach ($options['tags'] as $tag) {
+                        $this->container->tag($serviceId, $tag);
+                    }
+
+                    $registered = true;
+
+                } catch (\Throwable $e) {
+                    if ($this->strictMode) {
+                        throw $e;
+                    }
+                    error_log("Failed to process factory method {$method->getName()} in {$reflection->getName()}: " . $e->getMessage());
+                }
+            }
+        }
+
+        return $registered;
     }
 
     /**
-     * Discover routes in specific files
+     * Check if class has factory methods
+     */
+    private function hasFactoryMethods(ReflectionClass $reflection): bool
+    {
+        $methods = $reflection->getMethods(ReflectionMethod::IS_STATIC | ReflectionMethod::IS_PUBLIC);
+
+        foreach ($methods as $method) {
+            if (!empty($method->getAttributes(Factory::class))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Discover services in specific files
      */
     public function discoverInFiles(array $filePaths): void
     {
@@ -523,9 +600,9 @@ final class RouteDiscovery
     }
 
     /**
-     * Check if class has route attributes
+     * Check if class has service attributes
      */
-    public function hasRouteAttributes(string $className): bool
+    public function hasServiceAttributes(string $className): bool
     {
         if (!class_exists($className)) {
             return false;
@@ -533,7 +610,15 @@ final class RouteDiscovery
 
         try {
             $reflection = new ReflectionClass($className);
-            return !empty($reflection->getAttributes(Route::class));
+
+            // Check for Service attribute
+            if (!empty($reflection->getAttributes(Service::class))) {
+                return true;
+            }
+
+            // Check for Factory methods
+            return $this->hasFactoryMethods($reflection);
+
         } catch (\ReflectionException) {
             return false;
         }
@@ -546,7 +631,7 @@ final class RouteDiscovery
     {
         return [
             'processed_files' => $this->processedFiles,
-            'discovered_routes' => $this->discoveredRoutes,
+            'discovered_services' => $this->discoveredServices,
             'cached_classes' => count($this->classCache),
             'successful_classes' => count(array_filter($this->classCache)),
             'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
@@ -573,7 +658,7 @@ final class RouteDiscovery
     private function resetCounters(): void
     {
         $this->processedFiles = 0;
-        $this->discoveredRoutes = 0;
+        $this->discoveredServices = 0;
     }
 
     /**
@@ -582,12 +667,12 @@ final class RouteDiscovery
     public function autoDiscover(): void
     {
         $defaultPaths = [
-            'app/Actions',
-            'app/Controllers',
-            'app/Http/Actions',
-            'app/Http/Controllers',
-            'src/Actions',
-            'src/Controllers'
+            'app/Services',
+            'app/Repositories',
+            'app/Handlers',
+            'app/Providers',
+            'src/Services',
+            'src/Domain'
         ];
 
         $existingPaths = array_filter($defaultPaths, 'is_dir');
@@ -600,9 +685,9 @@ final class RouteDiscovery
     }
 
     /**
-     * Discover routes with pattern matching
+     * Discover services with pattern matching
      */
-    public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
+    public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Service,Repository,Handler}.php'): void
     {
         if (!is_dir($baseDir)) {
             throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
@@ -711,14 +796,14 @@ final class RouteDiscovery
     }
 
     /**
-     * Get discovered routes summary
+     * Get discovered services summary
      */
-    public function getDiscoveredRoutes(): array
+    public function getDiscoveredServices(): array
     {
         return [
-            'total_routes' => $this->discoveredRoutes,
-            'routes_per_file' => $this->processedFiles > 0
-                ? round($this->discoveredRoutes / $this->processedFiles, 2)
+            'total_services' => $this->discoveredServices,
+            'services_per_file' => $this->processedFiles > 0
+                ? round($this->discoveredServices / $this->processedFiles, 2)
                 : 0,
             'successful_classes' => count(array_filter($this->classCache)),
             'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
@@ -733,7 +818,7 @@ final class RouteDiscovery
     {
         return [
             'processed_files' => $this->processedFiles,
-            'discovered_routes' => $this->discoveredRoutes,
+            'discovered_services' => $this->discoveredServices,
             'cached_classes' => count($this->classCache),
             'success_rate' => round($this->successRate, 2) . '%',
             'strict_mode' => $this->strictMode,
