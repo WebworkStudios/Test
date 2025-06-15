@@ -127,42 +127,30 @@ final class RouteInfo
     /**
      * Compile path pattern to regex
      */
-
     private static function compilePattern(string $path): string
     {
-        // Debug: Original path
-        error_log("Compiling pattern for path: {$path}");
+        // Alle nicht-Parameter Teile escapen und Parameter durch Platzhalter ersetzen
+        $parts = preg_split('/(\{[^}]+\})/', $path, -1, PREG_SPLIT_DELIM_CAPTURE);
 
-        // Escape special regex characters FIRST, but preserve our placeholders
-        $escapedPath = preg_quote($path, '#');
-        error_log("After escaping path: {$escapedPath}");
-
-        // Replace escaped placeholders with regex patterns
-        $pattern = preg_replace_callback(
-            '/\\\\{([^}]+)\\\\}/',  // Match escaped placeholders like \{id\} or \{id:int\}
-            function ($matches) {
+        $pattern = '';
+        foreach ($parts as $part) {
+            if (preg_match('/^\{([^}]+)\}$/', $part, $matches)) {
+                // Parameter gefunden
                 $paramName = $matches[1];
-                error_log("Processing parameter: {$paramName}");
 
-                // Check for parameter constraints
                 if (str_contains($paramName, ':')) {
                     [$name, $constraint] = explode(':', $paramName, 2);
-                    $constraintPattern = self::getConstraintPattern($constraint);
-                    error_log("Parameter {$name} with constraint {$constraint} -> {$constraintPattern}");
-                    return $constraintPattern;
+                    $pattern .= self::getConstraintPattern($constraint);
+                } else {
+                    $pattern .= '([^/]+)';
                 }
+            } else {
+                // Normaler Text - escapen
+                $pattern .= preg_quote($part, '#');
+            }
+        }
 
-                // Default pattern for parameters
-                error_log("Parameter {$paramName} -> default pattern ([^/]+)");
-                return '([^/]+)';
-            },
-            $escapedPath
-        );
-
-        $result = '#^' . $pattern . '$#';
-        error_log("Final pattern: {$result}");
-
-        return $result;
+        return '#^' . $pattern . '$#';
     }
     /**
      * Get regex pattern for parameter constraints

@@ -1,19 +1,7 @@
-# public/.htaccess - Einfache, funktionierende Version
+# public/.htaccess - noch einfacher:
 RewriteEngine On
 
-# Security headers (optional)
-<IfModule mod_headers.c>
-    Header always set X-XSS-Protection "1; mode=block"
-    Header always set X-Content-Type-Options "nosniff"
-    Header always set X-Frame-Options "DENY"
-</IfModule>
-
-# Hide sensitive files
-<FilesMatch "^\.">
-    Require all denied
-</FilesMatch>
-
-# Main rewrite rule - EINFACH und funktional
+# Nur eine Regel
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php [QSA,L]
+RewriteRule . index.php [L]

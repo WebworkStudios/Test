@@ -1,11 +1,8 @@
+# .htaccess im Root - vereinfachen:
 RewriteEngine On
 
-# Block access to framework directories
-RewriteRule ^(app|framework|storage|tests|vendor)/ - [F,L]
-
-# Block sensitive files
-RewriteRule ^(composer\.(json|lock)|\.env.*|\.git.*|README\.md)$ - [F,L]
-
-# Redirect everything to public folder
+# Redirect alles zu public/ außer wenn bereits in public/
 RewriteCond %{REQUEST_URI} !^/public/
-RewriteRule ^(.*)$ /public/$1 [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ public/$1 [L,QSA]
