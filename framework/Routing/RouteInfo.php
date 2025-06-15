@@ -127,14 +127,19 @@ final class RouteInfo
     /**
      * Compile path pattern to regex
      */
+
     private static function compilePattern(string $path): string
     {
         // Debug: Original path
         error_log("Compiling pattern for path: {$path}");
 
-        // Replace placeholders with regex patterns first
+        // Escape special regex characters FIRST, but preserve our placeholders
+        $escapedPath = preg_quote($path, '#');
+        error_log("After escaping path: {$escapedPath}");
+
+        // Replace escaped placeholders with regex patterns
         $pattern = preg_replace_callback(
-            '/{([^}]+)}/',
+            '/\\\\{([^}]+)\\\\}/',  // Match escaped placeholders like \{id\} or \{id:int\}
             function ($matches) {
                 $paramName = $matches[1];
                 error_log("Processing parameter: {$paramName}");
@@ -151,22 +156,10 @@ final class RouteInfo
                 error_log("Parameter {$paramName} -> default pattern ([^/]+)");
                 return '([^/]+)';
             },
-            $path
+            $escapedPath
         );
 
-        error_log("After parameter replacement: {$pattern}");
-
-        // ✅ WICHTIG: Nicht doppelt escapen!
-        // Nur spezielle Regex-Zeichen escapen, NICHT unsere Parameter-Gruppen
-        $escapedPattern = preg_quote($pattern, '#');
-        error_log("After preg_quote: {$escapedPattern}");
-
-        // Unescape our regex groups that were escaped by preg_quote
-        $finalPattern = str_replace(['\\(', '\\)', '\\[', '\\]', '\\+', '\\*', '\\?'],
-            ['(', ')', '[', ']', '+', '*', '?'],
-            $escapedPattern);
-
-        $result = '#^' . $finalPattern . '$#';
+        $result = '#^' . $pattern . '$#';
         error_log("Final pattern: {$result}");
 
         return $result;
