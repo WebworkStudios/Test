@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 use Framework\Container\Attributes\{Config, Inject};
+use Framework\Container\ContainerNotFoundException;
 
 /**
  * High-Performance Framework Container für PHP 8.4
@@ -261,6 +262,11 @@ final class Container implements ContainerInterface
 
         // Standard resolution
         if (!$this->isRegistered($id)) {
+            // ✅ Auto-Wiring: Versuche Klasse direkt zu instanziieren
+            if (class_exists($id)) {
+                return $this->buildClass($id);
+            }
+
             throw ContainerNotFoundException::serviceNotFound(
                 $id,
                 array_keys($this->registry['services'])

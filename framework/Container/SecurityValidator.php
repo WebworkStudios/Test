@@ -108,10 +108,36 @@ final readonly class SecurityValidator
     {
         return match (true) {
             $reflection->isInternal() => false,
+            $this->isActionClass($reflection) => true, // ✅ Action-Klassen sind erlaubt
             $this->hasSecurityRisks($reflection) => false,
             !$this->isClassFileSecure($reflection) => false,
             default => true
         };
+    }
+
+    /**
+     * ✅ Neue Methode: Prüft ob es eine Action-Klasse ist
+     */
+    private function isActionClass(\ReflectionClass $reflection): bool
+    {
+        $className = $reflection->getName();
+
+        // Action-Klassen sind explizit erlaubt
+        $actionNamespaces = [
+            'App\\Actions\\',
+            'App\\Controllers\\',
+            'App\\Http\\Actions\\',
+            'App\\Http\\Controllers\\'
+        ];
+
+        foreach ($actionNamespaces as $namespace) {
+            if (str_starts_with($className, $namespace)) {
+                // Zusätzliche Prüfung: Muss __invoke haben
+                return $reflection->hasMethod('__invoke');
+            }
+        }
+
+        return false;
     }
 
     /**
