@@ -67,7 +67,6 @@ final class Kernel
         });
     }
 
-    // In framework/kernel.php - performRouteDiscovery() - Debug-Logs entfernen
     private function performRouteDiscovery(Router $router): void
     {
         $directories = $this->config['routing']['discovery_paths'] ?? [

@@ -26,7 +26,7 @@ final class Route
 
     /**
      * @param string $method HTTP method (GET, POST, PUT, DELETE, etc.)
-     * @param string $path URL path with optional parameters like /user/{id}
+     * @param string $path URL path with optional parameters like /user/{id} or /user/{id:int}
      * @param array<string> $middleware Optional middleware for this route
      * @param string|null $name Optional route name for URL generation
      * @param string|null $subdomain Optional subdomain constraint (e.g., 'api', 'admin')
@@ -125,7 +125,7 @@ final class Route
     }
 
     /**
-     * Validate parameter names
+     * Validate parameter names with constraint support
      */
     private function validateParameterName(string $param): void
     {
@@ -137,18 +137,46 @@ final class Route
             throw new \InvalidArgumentException("Parameter name too long: {$param}");
         }
 
+        // ✅ Support for constraints: name:constraint format
+        if (str_contains($param, ':')) {
+            [$name, $constraint] = explode(':', $param, 2);
+
+            // Validate parameter name part
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name)) {
+                throw new \InvalidArgumentException("Invalid parameter name: {$name}");
+            }
+
+            // Validate constraint part
+            $validConstraints = ['int', 'integer', 'uuid', 'slug', 'alpha', 'alnum'];
+            if (!in_array($constraint, $validConstraints, true)) {
+                throw new \InvalidArgumentException("Invalid parameter constraint: {$constraint}. Valid constraints: " . implode(', ', $validConstraints));
+            }
+
+            // Check for reserved parameter names
+            $this->checkReservedParameterName($name);
+            return;
+        }
+
+        // Standard parameter without constraint
         if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $param)) {
             throw new \InvalidArgumentException("Invalid parameter name: {$param}");
         }
 
-        // Reserved parameter names
+        $this->checkReservedParameterName($param);
+    }
+
+    /**
+     * Check for reserved parameter names
+     */
+    private function checkReservedParameterName(string $name): void
+    {
         $reserved = [
             '__construct', '__destruct', '__call', '__get', '__set',
             'class', 'interface', 'trait', 'enum', 'function'
         ];
 
-        if (in_array(strtolower($param), $reserved, true)) {
-            throw new \InvalidArgumentException("Reserved parameter name: {$param}");
+        if (in_array(strtolower($name), $reserved, true)) {
+            throw new \InvalidArgumentException("Reserved parameter name: {$name}");
         }
     }
 

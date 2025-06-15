@@ -129,35 +129,48 @@ final class RouteInfo
      */
     private static function compilePattern(string $path): string
     {
+        // Debug: Original path
+        error_log("Compiling pattern for path: {$path}");
+
         // Replace placeholders with regex patterns first
         $pattern = preg_replace_callback(
-            '/{([^}]+)}/',  // ✅ Kein Escaping nötig
+            '/{([^}]+)}/',
             function ($matches) {
                 $paramName = $matches[1];
+                error_log("Processing parameter: {$paramName}");
 
                 // Check for parameter constraints
                 if (str_contains($paramName, ':')) {
                     [$name, $constraint] = explode(':', $paramName, 2);
-                    return self::getConstraintPattern($constraint);
+                    $constraintPattern = self::getConstraintPattern($constraint);
+                    error_log("Parameter {$name} with constraint {$constraint} -> {$constraintPattern}");
+                    return $constraintPattern;
                 }
 
                 // Default pattern for parameters
+                error_log("Parameter {$paramName} -> default pattern ([^/]+)");
                 return '([^/]+)';
             },
             $path
         );
 
-        // Then escape remaining special characters
-        $pattern = preg_quote($pattern, '#');
+        error_log("After parameter replacement: {$pattern}");
+
+        // ✅ WICHTIG: Nicht doppelt escapen!
+        // Nur spezielle Regex-Zeichen escapen, NICHT unsere Parameter-Gruppen
+        $escapedPattern = preg_quote($pattern, '#');
+        error_log("After preg_quote: {$escapedPattern}");
 
         // Unescape our regex groups that were escaped by preg_quote
-        $pattern = str_replace(['\\(', '\\)', '\\[', '\\]', '\\+', '\\*', '\\?'],
+        $finalPattern = str_replace(['\\(', '\\)', '\\[', '\\]', '\\+', '\\*', '\\?'],
             ['(', ')', '[', ']', '+', '*', '?'],
-            $pattern);
+            $escapedPattern);
 
-        return '#^' . $pattern . '$#';
+        $result = '#^' . $finalPattern . '$#';
+        error_log("Final pattern: {$result}");
+
+        return $result;
     }
-
     /**
      * Get regex pattern for parameter constraints
      */
@@ -221,21 +234,33 @@ final class RouteInfo
     {
         // Method check
         if ($this->method !== strtoupper($method)) {
+            error_log("Method mismatch: {$this->method} !== " . strtoupper($method));
             return false;
         }
 
         // Subdomain check
         if ($this->subdomain !== $subdomain) {
+            error_log("Subdomain mismatch: {$this->subdomain} !== {$subdomain}");
             return false;
         }
 
         // Static route exact match
         if ($this->isStatic) {
-            return $this->originalPath === $path;
+            $matches = $this->originalPath === $path;
+            error_log("Static route check: {$this->originalPath} === {$path} = " . ($matches ? 'true' : 'false'));
+            return $matches;
         }
 
         // Dynamic route pattern match
-        return preg_match($this->pattern, $path) === 1;
+        error_log("Testing pattern: {$this->pattern} against path: {$path}");
+        $result = preg_match($this->pattern, $path);
+        error_log("Pattern match result: " . ($result === 1 ? 'MATCH' : 'NO MATCH'));
+
+        if ($result === false) {
+            error_log("Pattern error: " . preg_last_error());
+        }
+
+        return $result === 1;
     }
 
     /**

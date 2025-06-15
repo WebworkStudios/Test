@@ -1,11 +1,19 @@
+# public/.htaccess - Einfache, funktionierende Version
 RewriteEngine On
 
-# Entferne trailing slash redirect (kann Probleme verursachen)
-# RewriteCond %{REQUEST_FILENAME} !-d
-# RewriteCond %{THE_REQUEST} /+[^\s?]*?/?(\?[^\s]*)?\s
-# RewriteRule ^(.+?)/?$ $1 [R=301,L]
+# Security headers (optional)
+<IfModule mod_headers.c>
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+</IfModule>
 
-# Hauptregel - alle nicht-existierenden Dateien zu index.php
+# Hide sensitive files
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Main rewrite rule - EINFACH und funktional
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^(.*)$ index.php [QSA,L]

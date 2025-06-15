@@ -282,12 +282,17 @@ final class Router
     /**
      * Dispatch HTTP request
      */
+// In framework/Routing/Router.php - dispatch() Methode erweitern
     public function dispatch(Request $request): Response
     {
         $startTime = hrtime(true);
         $this->dispatchCount++;
 
         try {
+            error_log("=== ROUTER DISPATCH START ===");
+            error_log("Request: {$request->method} {$request->path}");
+            error_log("Host: {$request->host()}");
+
             $this->validateRequest($request);
             $this->compileRoutes();
 
@@ -295,9 +300,14 @@ final class Router
             $path = $this->sanitizePath($request->path);
             $subdomain = $this->extractSubdomain($request->host());
 
+            error_log("Normalized: {$method} {$path} (subdomain: " . ($subdomain ?? 'none') . ")");
+
             // Check cache first
             $cacheKey = $this->generateCacheKey($method, $path, $subdomain);
+            error_log("Cache key: {$cacheKey}");
+
             if (isset($this->routeCache[$cacheKey])) {
+                error_log("Cache HIT");
                 $cachedRoute = $this->routeCache[$cacheKey];
                 if ($this->isCacheValid($cachedRoute, $request)) {
                     $this->cacheHits++;
@@ -305,17 +315,24 @@ final class Router
                     return $this->callAction($cachedRoute['route']->actionClass, $request, $params);
                 } else {
                     unset($this->routeCache[$cacheKey]);
+                    error_log("Cache INVALID");
                 }
+            } else {
+                error_log("Cache MISS");
             }
 
             // Find matching route
+            error_log("Looking for matching route...");
             $matchResult = $this->findMatchingRoute($method, $path, $subdomain);
 
             if ($matchResult === null) {
+                error_log("❌ NO MATCHING ROUTE FOUND");
                 $this->handleNoMatch($method, $path, $subdomain);
             }
 
             [$route, $params] = $matchResult;
+            error_log("✅ Route found: {$route->actionClass}");
+            error_log("Parameters: " . json_encode($params));
 
             // Cache successful match
             $this->cacheMatch($cacheKey, $route, $params);
@@ -323,12 +340,11 @@ final class Router
             return $this->callAction($route->actionClass, $request, $params);
 
         } catch (\Throwable $e) {
-            if ($this->debugMode) {
-                error_log("Router dispatch error: " . $e->getMessage());
-            }
+            error_log("Router dispatch error: " . $e->getMessage());
             throw $e;
         } finally {
             $this->totalDispatchTime += (hrtime(true) - $startTime) / 1_000_000;
+            error_log("=== ROUTER DISPATCH END ===");
         }
     }
 
@@ -579,34 +595,57 @@ final class Router
     /**
      * Find matching route
      */
+// In framework/Routing/Router.php - findMatchingRoute() erweitern
     private function findMatchingRoute(string $method, string $path, ?string $subdomain): ?array
     {
+        error_log("=== FINDING MATCHING ROUTE ===");
+        error_log("Looking for: {$method} {$path} (subdomain: " . ($subdomain ?? 'none') . ")");
+
         if (!isset($this->routes[$method])) {
+            error_log("❌ No routes for method: {$method}");
+            error_log("Available methods: " . implode(', ', array_keys($this->routes)));
             return null;
         }
+
+        error_log("Routes available for {$method}: " . count($this->routes[$method]));
 
         // Try static routes first (O(1) lookup)
         if (isset($this->staticRoutes[$method])) {
             $staticKey = $this->generateStaticKey($path, $subdomain);
+            error_log("Checking static routes with key: {$staticKey}");
+
             if (isset($this->staticRoutes[$method][$staticKey])) {
+                error_log("✅ Static route match found");
                 return [$this->staticRoutes[$method][$staticKey], []];
+            } else {
+                error_log("No static route match");
             }
         }
 
         // Try dynamic routes
         if (isset($this->dynamicRoutes[$method])) {
-            foreach ($this->dynamicRoutes[$method] as $route) {
+            error_log("Checking " . count($this->dynamicRoutes[$method]) . " dynamic routes");
+
+            foreach ($this->dynamicRoutes[$method] as $index => $route) {
+                error_log("Testing route #{$index}: {$route->originalPath} -> {$route->actionClass}");
+
                 if ($route->matches($method, $path, $subdomain)) {
+                    error_log("✅ Route matches! Extracting parameters...");
                     try {
                         $params = $route->extractParams($path);
+                        error_log("Parameters extracted: " . json_encode($params));
                         return [$route, $params];
-                    } catch (\InvalidArgumentException) {
+                    } catch (\InvalidArgumentException $e) {
+                        error_log("❌ Parameter extraction failed: " . $e->getMessage());
                         continue; // Try next route
                     }
+                } else {
+                    error_log("Route does not match");
                 }
             }
         }
 
+        error_log("❌ No matching route found");
         return null;
     }
 
