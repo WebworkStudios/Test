@@ -1,5 +1,3 @@
-# Root .htaccess - XAMPP Compatible
-
 RewriteEngine On
 
 # Block access to framework directories
@@ -8,6 +6,6 @@ RewriteRule ^(app|framework|storage|tests|vendor)/ - [F,L]
 # Block sensitive files
 RewriteRule ^(composer\.(json|lock)|\.env.*|\.git.*|README\.md)$ - [F,L]
 
-# Redirect everything else to public folder
+# Redirect everything to public folder
 RewriteCond %{REQUEST_URI} !^/public/
 RewriteRule ^(.*)$ /public/$1 [L]

@@ -49,15 +49,75 @@ final class Kernel
 
         // Register router with auto-discovery
         $this->container->singleton(Router::class, function (Container $c) {
-            $router = Router::create($c, $this->config['routing'] ?? []);
+            // ✅ Router OHNE Discovery erstellen - Discovery separat hinzufügen
+            $router = new Router(
+                container: $c,
+                cache: null,
+                discovery: null, // ⚠️ Nicht hier - verhindert zirkuläre Dependencies
+                debugMode: $this->config['debug'] ?? false,
+                strictMode: $this->config['routing']['strict'] ?? true
+            );
 
-            // Auto-discover routes if enabled
+            // ✅ Auto-Discovery NACH Router-Erstellung
             if (($this->config['routing']['auto_discover'] ?? true)) {
-                $this->discoverRoutes($router);
+                $this->performRouteDiscovery($router);
             }
 
             return $router;
         });
+    }
+
+    // In framework/kernel.php - performRouteDiscovery() - Debug-Logs entfernen
+    private function performRouteDiscovery(Router $router): void
+    {
+        $directories = $this->config['routing']['discovery_paths'] ?? [
+            'app/Actions',
+            'app/Controllers'
+        ];
+
+        $normalizedDirs = [];
+        foreach ($directories as $dir) {
+            if (is_string($dir)) {
+                $realPath = realpath($dir);
+                if ($realPath !== false && is_dir($realPath)) {
+                    $normalizedDirs[] = $realPath;
+                }
+            }
+        }
+
+        // ✅ Debug-Logs entfernen oder nur bei debug=true
+        if ($this->config['debug'] ?? false) {
+            error_log("Looking for routes in: " . implode(', ', $directories));
+            error_log("Existing directories: " . implode(', ', $normalizedDirs));
+        }
+
+        if (empty($normalizedDirs)) {
+            return;
+        }
+
+        try {
+            $scanner = new \Framework\Routing\RouteFileScanner([
+                'strict_mode' => false
+            ]);
+
+            $discovery = new \Framework\Routing\RouteDiscovery(
+                router: $router,
+                scanner: $scanner,
+                config: ['strict_mode' => false]
+            );
+
+            $discovery->discover($normalizedDirs);
+
+            if ($this->config['debug'] ?? false) {
+                $stats = $discovery->getStats();
+                error_log("✅ Discovery completed: {$stats['discovered_routes']} routes in {$stats['processed_files']} files");
+            }
+
+        } catch (\Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("❌ Route discovery failed: " . $e->getMessage());
+            }
+        }
     }
 
     /**

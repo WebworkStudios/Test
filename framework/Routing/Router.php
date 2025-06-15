@@ -63,11 +63,6 @@ final class Router
     )
     {
         $this->loadCachedRoutes();
-
-        // Auto-discovery if configured
-        if ($this->discovery !== null && $this->debugMode) {
-            $this->autoDiscoverRoutes();
-        }
     }
 
     /**

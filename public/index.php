@@ -32,7 +32,22 @@ function env(string $key, mixed $default = null): mixed {
     };
 }
 
-// ✅ Configuration using .env values
+// ✅ Create necessary directories
+$directories = [
+    __DIR__ . '/../app/Actions',
+    __DIR__ . '/../app/Controllers',
+    __DIR__ . '/../storage/cache/routes',
+    __DIR__ . '/../storage/sessions',
+    __DIR__ . '/../storage/logs'
+];
+
+foreach ($directories as $dir) {
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+}
+
+// ✅ Configuration using absolute paths and .env values
 $config = [
     'app' => [
         'env' => env('APP_ENV', 'production'),
@@ -50,10 +65,10 @@ $config = [
         'debug' => env('ROUTE_DEBUG', false),
         'auto_discover' => true,
         'discovery_paths' => [
-            'app/Actions',
-            'app/Controllers'
+            realpath(__DIR__ . '/../app/Actions') ?: __DIR__ . '/../app/Actions',
+            realpath(__DIR__ . '/../app/Controllers') ?: __DIR__ . '/../app/Controllers'
         ],
-        'cache_dir' => __DIR__ . '/../storage/cache/routes',
+        'cache_dir' => realpath(__DIR__ . '/../storage/cache/routes') ?: __DIR__ . '/../storage/cache/routes',
         'cache' => env('ROUTE_CACHE', true),
         'strict' => false
     ],
@@ -65,6 +80,31 @@ $config = [
     ]
 ];
 
-// ✅ Create and run application
-$app = Application::create($config);
-$app->run();
+// ✅ Create and run application with error handling
+try {
+    $app = Application::create($config);
+    $app->run();
+} catch (\Throwable $e) {
+    // Log the error
+    error_log("Application Error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+
+    if (env('APP_DEBUG', false)) {
+        // Debug mode - show detailed error
+        echo "<!DOCTYPE html><html><head><title>Application Error</title></head><body>";
+        echo "<h1>🐛 Application Error</h1>";
+        echo "<div style='background:#f8f9fa;padding:20px;border-radius:8px;margin:20px 0;'>";
+        echo "<strong>Message:</strong> " . htmlspecialchars($e->getMessage()) . "<br>";
+        echo "<strong>File:</strong> " . htmlspecialchars($e->getFile()) . ":" . $e->getLine() . "<br>";
+        echo "<strong>Trace:</strong><br><pre style='background:#e9ecef;padding:15px;border-radius:4px;overflow:auto;'>";
+        echo htmlspecialchars($e->getTraceAsString());
+        echo "</pre></div></body></html>";
+    } else {
+        // Production mode - generic error
+        http_response_code(500);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'error' => 'Internal server error',
+            'timestamp' => date('c')
+        ]);
+    }
+}

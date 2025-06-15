@@ -56,7 +56,7 @@ final class RouteDiscovery
             throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
         }
 
-        // Validate ignored directories
+        // ✅ Validierung lockern für leere Arrays
         foreach ($this->ignoredDirectories as $dir) {
             if (!is_string($dir) || strlen($dir) > 100) {
                 throw new \InvalidArgumentException('Invalid ignored directory specification');
@@ -516,7 +516,7 @@ final class RouteDiscovery
     /**
      * Create file filter for iterator
      */
-    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
+    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveIterator $iterator): bool
     {
         $filename = $file->getFilename();
 
@@ -531,12 +531,12 @@ final class RouteDiscovery
             return $this->isAllowedDirectory($filename);
         }
 
-        // File validation - delegate to scanner
+        // File validation
         return $file->getExtension() === 'php' &&
             $file->isReadable() &&
-            $file->getSize() > 0;
+            $file->getSize() > 0 &&
+            $file->getSize() <= 2097152; // 2MB limit
     }
-
     /**
      * Check if directory is allowed
      */
