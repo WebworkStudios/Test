@@ -486,7 +486,7 @@ final class Container implements ContainerInterface
     /**
      * Sichere Konfigurationswert-Abfrage
      */
-    private function getConfig(string $key, mixed $default = null): mixed
+    public function getConfig(string $key, mixed $default = null): mixed
     {
         if (str_contains($key, '..') || empty($key)) {
             return $default;
