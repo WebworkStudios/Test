@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Container\Attributes;
 
 use Attribute;
+use InvalidArgumentException;
 
 /**
  * Inject a specific service by ID or tag mit PHP 8.4 Features
@@ -77,9 +78,9 @@ final  class Inject
     {
         match (true) {
             $this->id !== null && $this->tag !== null =>
-            throw new \InvalidArgumentException('Cannot specify both id and tag'),
+            throw new InvalidArgumentException('Cannot specify both id and tag'),
             $this->id === null && $this->tag === null =>
-            throw new \InvalidArgumentException('Must specify either id or tag'),
+            throw new InvalidArgumentException('Must specify either id or tag'),
             default => null
         };
     }
@@ -95,15 +96,15 @@ final  class Inject
 
         match (true) {
             empty($this->id) =>
-            throw new \InvalidArgumentException('Service ID cannot be empty'),
+            throw new InvalidArgumentException('Service ID cannot be empty'),
             strlen($this->id) > 255 =>
-            throw new \InvalidArgumentException('Service ID too long (max 255 characters)'),
+            throw new InvalidArgumentException('Service ID too long (max 255 characters)'),
             str_contains($this->id, '..') =>
-            throw new \InvalidArgumentException('Service ID cannot contain ".."'),
+            throw new InvalidArgumentException('Service ID cannot contain ".."'),
             str_contains($this->id, '/') =>
-            throw new \InvalidArgumentException('Service ID cannot contain "/"'),
+            throw new InvalidArgumentException('Service ID cannot contain "/"'),
             !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $this->id) =>
-            throw new \InvalidArgumentException('Invalid service ID format'),
+            throw new InvalidArgumentException('Invalid service ID format'),
             default => null
         };
     }
@@ -119,15 +120,15 @@ final  class Inject
 
         match (true) {
             empty($this->tag) =>
-            throw new \InvalidArgumentException('Tag cannot be empty'),
+            throw new InvalidArgumentException('Tag cannot be empty'),
             strlen($this->tag) > 100 =>
-            throw new \InvalidArgumentException('Tag too long (max 100 characters)'),
+            throw new InvalidArgumentException('Tag too long (max 100 characters)'),
             str_contains($this->tag, '..') =>
-            throw new \InvalidArgumentException('Tag cannot contain ".."'),
+            throw new InvalidArgumentException('Tag cannot contain ".."'),
             str_contains($this->tag, '/') =>
-            throw new \InvalidArgumentException('Tag cannot contain "/"'),
+            throw new InvalidArgumentException('Tag cannot contain "/"'),
             !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $this->tag) =>
-            throw new \InvalidArgumentException('Invalid tag format'),
+            throw new InvalidArgumentException('Invalid tag format'),
             default => null
         };
     }
@@ -139,9 +140,9 @@ final  class Inject
     {
         match (true) {
             $this->priority < 0 =>
-            throw new \InvalidArgumentException('Priority cannot be negative'),
+            throw new InvalidArgumentException('Priority cannot be negative'),
             $this->priority > 1000 =>
-            throw new \InvalidArgumentException('Priority too high (max 1000)'),
+            throw new InvalidArgumentException('Priority too high (max 1000)'),
             default => null
         };
     }
@@ -360,25 +361,25 @@ final  class Inject
 
         try {
             $this->validateExclusivity();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateId();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateTag();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validatePriority();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 

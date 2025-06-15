@@ -21,7 +21,8 @@ if (file_exists($envFile)) {
 }
 
 // ✅ Helper function for env values
-function env(string $key, mixed $default = null): mixed {
+function env(string $key, mixed $default = null): mixed
+{
     $value = $_ENV[$key] ?? $default;
 
     // Convert string booleans
@@ -56,7 +57,7 @@ $config = [
     ],
     'session' => [
         'name' => 'framework_session',
-        'lifetime' => (int) env('SESSION_LIFETIME', 7200),
+        'lifetime' => (int)env('SESSION_LIFETIME', 7200),
         'secure' => env('SESSION_SECURE', false),
         'httponly' => env('SESSION_HTTPONLY', true),
         'samesite' => env('SESSION_SAMESITE', 'Lax')
@@ -84,7 +85,7 @@ $config = [
 try {
     $app = Application::create($config);
     $app->run();
-} catch (\Throwable $e) {
+} catch (Throwable $e) {
     // Log the error
     error_log("Application Error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
 

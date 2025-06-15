@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace framework\Http\Cache;
 
+use DateTimeInterface;
+use InvalidArgumentException;
+
 /**
  * HTTP Cookie representation
  */
@@ -30,11 +33,11 @@ final readonly class Cookie
     {
         match (true) {
             $this->name === '' || preg_match('/[=,; \t\r\n\013\014]/', $this->name)
-            => throw new \InvalidArgumentException("Invalid cookie name: {$this->name}"),
+            => throw new InvalidArgumentException("Invalid cookie name: {$this->name}"),
             preg_match('/[,; \t\r\n\013\014]/', $this->value)
-            => throw new \InvalidArgumentException("Invalid cookie value"),
+            => throw new InvalidArgumentException("Invalid cookie value"),
             $this->samesite !== '' && !in_array($this->samesite, ['Strict', 'Lax', 'None'], true)
-            => throw new \InvalidArgumentException("Invalid SameSite value: {$this->samesite}"),
+            => throw new InvalidArgumentException("Invalid SameSite value: {$this->samesite}"),
             default => null
         };
     }
@@ -50,7 +53,7 @@ final readonly class Cookie
     /**
      * Create cookie that expires at specific date
      */
-    public static function expiresAt(string $name, string $value, \DateTimeInterface $date): self
+    public static function expiresAt(string $name, string $value, DateTimeInterface $date): self
     {
         return new self($name, $value, $date->getTimestamp());
     }

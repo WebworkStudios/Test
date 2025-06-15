@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
+use DateMalformedStringException;
+use DateTimeImmutable;
 use framework\Http\Cache\CacheHeaders;
+use InvalidArgumentException;
+use JsonException;
 
 /**
  * HTTP Request with Lazy Loading and optimized structure
@@ -12,18 +16,18 @@ use framework\Http\Cache\CacheHeaders;
 final class Request
 {
     // Lazy-loaded data (computed only when needed)
-private const int MAX_STRING_LENGTH = 1000000;
-private const int MAX_BODY_SIZE = 10485760;
-private const int MAX_JSON_SIZE = 1048576;
-private const int MAX_ARRAY_ITEMS = 1000;
+    private const int MAX_STRING_LENGTH = 1000000;
+    private const int MAX_BODY_SIZE = 10485760;
+    private const int MAX_JSON_SIZE = 1048576;
+    private const int MAX_ARRAY_ITEMS = 1000;
     private ?array $parsedBody = null;
     private ?Headers $headersObject = null;
 
     // Input size limits
-        private ?CacheHeaders $cacheHeaders = null;    // 1MB for strings
-        private ?array $parsedFiles = null;       // 10MB for request body
-        private ?string $clientIp = null;        // 1MB for JSON
-        private ?string $fullUrl = null;         // Max array elements
+    private ?CacheHeaders $cacheHeaders = null;    // 1MB for strings
+    private ?array $parsedFiles = null;       // 10MB for request body
+    private ?string $clientIp = null;        // 1MB for JSON
+    private ?string $fullUrl = null;         // Max array elements
 
     /**
      * @param string $method HTTP method
@@ -57,19 +61,30 @@ private const int MAX_ARRAY_ITEMS = 1000;
     {
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
+
+        // Validate URI before processing
+        if (preg_match('/^[A-Z]:/i', $uri)) {
+            throw new InvalidArgumentException('Invalid request URI: contains absolute path');
+        }
+
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
+
+        // Additional path validation
+        if (str_contains($path, '\\') || str_contains($path, "\0")) {
+            throw new InvalidArgumentException('Invalid characters in request path');
+        }
+
         $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
         $contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
 
-        // Only parse small/fast data eagerly
         return new self(
             method: $method,
             uri: $uri,
             path: $path,
-            query: $_GET, // Small, parse eagerly
-            cookies: $_COOKIE, // Small, parse eagerly
+            query: $_GET,
+            cookies: $_COOKIE,
             server: $_SERVER,
-            rawBody: file_get_contents('php://input') ?: '', // Store raw, parse later
+            rawBody: file_get_contents('php://input') ?: '',
             contentType: $contentType,
             contentLength: $contentLength
         );
@@ -254,7 +269,7 @@ private const int MAX_ARRAY_ITEMS = 1000;
             }
 
             return $default;
-        } catch (\JsonException) {
+        } catch (JsonException) {
             return $default;
         }
     }
@@ -404,7 +419,7 @@ private const int MAX_ARRAY_ITEMS = 1000;
     /**
      * Get parameter as date with optional default
      */
-    public function date(string $key, ?\DateTimeImmutable $default = null): ?\DateTimeImmutable
+    public function date(string $key, ?DateTimeImmutable $default = null): ?DateTimeImmutable
     {
         $value = $this->string($key);
 
@@ -413,8 +428,8 @@ private const int MAX_ARRAY_ITEMS = 1000;
         }
 
         try {
-            return new \DateTimeImmutable($value);
-        } catch (\DateMalformedStringException) {
+            return new DateTimeImmutable($value);
+        } catch (DateMalformedStringException) {
             return $default;
         }
     }

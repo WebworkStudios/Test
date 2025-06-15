@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Closure;
+use Throwable;
+
 /**
  * Enhanced Service Provider für organizing service registrations mit PHP 8.4 Features
  *
@@ -203,28 +206,6 @@ abstract class ServiceProvider
     }
 
     /**
-     * Validiert erforderliche Konfiguration und Services
-     */
-    protected function validateRequirements(): bool
-    {
-        // Prüfe erforderliche Konfiguration
-        foreach ($this->requiredConfig as $configKey) {
-            if (!$this->hasConfig($configKey)) {
-                return false;
-            }
-        }
-
-        // Prüfe erforderliche Services
-        foreach ($this->requiredServices as $serviceId) {
-            if (!$this->container->isRegistered($serviceId)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
      * Prüft ob Konfigurationswert existiert
      */
     protected function hasConfig(string $key): bool
@@ -256,6 +237,28 @@ abstract class ServiceProvider
         }
 
         return $value;
+    }
+
+    /**
+     * Validiert erforderliche Konfiguration und Services
+     */
+    protected function validateRequirements(): bool
+    {
+        // Prüfe erforderliche Konfiguration
+        foreach ($this->requiredConfig as $configKey) {
+            if (!$this->hasConfig($configKey)) {
+                return false;
+            }
+        }
+
+        // Prüfe erforderliche Services
+        foreach ($this->requiredServices as $serviceId) {
+            if (!$this->container->isRegistered($serviceId)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -344,12 +347,12 @@ abstract class ServiceProvider
     /**
      * Helper für Factory-Closures mit Error Handling
      */
-    protected function factory(callable $factory): \Closure
+    protected function factory(callable $factory): Closure
     {
         return function (Container $container) use ($factory): mixed {
             try {
                 return $factory($container);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 throw ContainerException::cannotResolve(
                     'factory_service',
                     "Factory in " . static::class . " failed: " . $e->getMessage(),
@@ -370,7 +373,7 @@ abstract class ServiceProvider
             try {
                 $this->bind($id, $concrete);
                 $this->tag($id, $tag);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 error_log("Failed to register tagged service '{$id}' with tag '{$tag}': " . $e->getMessage());
             }
         }
@@ -494,7 +497,7 @@ abstract class ServiceProvider
                     is_callable($definition) => $this->singleton($id, $definition),
                     default => $this->bind($id, $definition)
                 };
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 error_log("Failed to register service '{$id}' in " . static::class . ": " . $e->getMessage());
             }
         }

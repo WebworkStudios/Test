@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Exception;
 use Framework\Container\Attributes\{Factory, Service};
+use InvalidArgumentException;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
+use ReflectionException;
 use ReflectionMethod;
+use RuntimeException;
+use SplFileInfo;
+use Throwable;
 
 /**
  * Optimized service discovery with PHP 8.4 features and simplified architecture
@@ -65,13 +71,13 @@ final class ServiceDiscovery
     private function validateConfiguration(): void
     {
         if ($this->maxDepth < 1 || $this->maxDepth > 20) {
-            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
+            throw new InvalidArgumentException('Invalid max depth: must be between 1 and 20');
         }
 
         // Validate ignored directories
         foreach ($this->ignoredDirectories as $dir) {
             if (!is_string($dir) || strlen($dir) > 100) {
-                throw new \InvalidArgumentException('Invalid ignored directory specification');
+                throw new InvalidArgumentException('Invalid ignored directory specification');
             }
         }
     }
@@ -117,7 +123,7 @@ final class ServiceDiscovery
             // Check for Factory methods
             return $this->hasFactoryMethods($reflection);
 
-        } catch (\ReflectionException) {
+        } catch (ReflectionException) {
             return false;
         }
     }
@@ -192,7 +198,7 @@ final class ServiceDiscovery
         $existingPaths = array_filter($defaultPaths, 'is_dir');
 
         if (empty($existingPaths)) {
-            throw new \RuntimeException('No default discovery paths found');
+            throw new RuntimeException('No default discovery paths found');
         }
 
         $this->discover($existingPaths);
@@ -217,24 +223,24 @@ final class ServiceDiscovery
     private function validateDirectories(array $directories): void
     {
         if (empty($directories)) {
-            throw new \InvalidArgumentException('At least one directory must be specified');
+            throw new InvalidArgumentException('At least one directory must be specified');
         }
 
         if (count($directories) > 20) {
-            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
+            throw new InvalidArgumentException('Too many directories to scan (max 20)');
         }
 
         foreach ($directories as $directory) {
             if (!is_string($directory)) {
-                throw new \InvalidArgumentException('Directory must be a string');
+                throw new InvalidArgumentException('Directory must be a string');
             }
 
             if (strlen($directory) > 500) {
-                throw new \InvalidArgumentException('Directory path too long');
+                throw new InvalidArgumentException('Directory path too long');
             }
 
             if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
-                throw new \InvalidArgumentException('Directory path contains invalid characters');
+                throw new InvalidArgumentException('Directory path contains invalid characters');
             }
         }
     }
@@ -251,7 +257,7 @@ final class ServiceDiscovery
 
         if (!is_dir($directory)) {
             if ($this->strictMode) {
-                throw new \InvalidArgumentException("Directory does not exist: {$directory}");
+                throw new InvalidArgumentException("Directory does not exist: {$directory}");
             }
             return;
         }
@@ -259,14 +265,14 @@ final class ServiceDiscovery
         $realDirectory = realpath($directory);
         if ($realDirectory === false || !$this->securityValidator->isPathSafe($realDirectory)) {
             if ($this->strictMode) {
-                throw new \InvalidArgumentException("Invalid or insecure directory: {$directory}");
+                throw new InvalidArgumentException("Invalid or insecure directory: {$directory}");
             }
             return;
         }
 
         try {
             $this->scanWithIterator($realDirectory);
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             if ($this->strictMode) {
                 throw $e;
             }
@@ -385,7 +391,7 @@ final class ServiceDiscovery
         // Validate content security
         if (!$this->securityValidator->isContentSafe($content)) {
             if ($this->strictMode) {
-                throw new \RuntimeException("Unsafe content detected in file: {$filePath}");
+                throw new RuntimeException("Unsafe content detected in file: {$filePath}");
             }
             return null;
         }
@@ -508,7 +514,7 @@ final class ServiceDiscovery
                 $this->discoveredServices++;
             }
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->classCache[$className] = false;
 
             if ($this->strictMode) {
@@ -546,7 +552,7 @@ final class ServiceDiscovery
 
             return true;
 
-        } catch (\ReflectionException $e) {
+        } catch (ReflectionException $e) {
             if ($this->strictMode) {
                 throw $e;
             }
@@ -600,7 +606,7 @@ final class ServiceDiscovery
 
                 return true;
 
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 if ($this->strictMode) {
                     throw $e;
                 }
@@ -659,7 +665,7 @@ final class ServiceDiscovery
 
                     $registered = true;
 
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     if ($this->strictMode) {
                         throw $e;
                     }
@@ -677,18 +683,18 @@ final class ServiceDiscovery
     public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Service,Repository,Handler}.php'): void
     {
         if (!is_dir($baseDir)) {
-            throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
+            throw new InvalidArgumentException("Base directory does not exist: {$baseDir}");
         }
 
         if (!$this->securityValidator->isPathSafe($baseDir)) {
-            throw new \InvalidArgumentException("Base directory is not safe: {$baseDir}");
+            throw new InvalidArgumentException("Base directory is not safe: {$baseDir}");
         }
 
         $fullPattern = rtrim($baseDir, '/') . '/' . ltrim($pattern, '/');
         $files = glob($fullPattern, GLOB_BRACE);
 
         if ($files === false) {
-            throw new \RuntimeException("Failed to execute glob pattern: {$fullPattern}");
+            throw new RuntimeException("Failed to execute glob pattern: {$fullPattern}");
         }
 
         $this->discoverInFiles($files);
@@ -711,24 +717,24 @@ final class ServiceDiscovery
     private function validateFilePaths(array $filePaths): void
     {
         if (empty($filePaths)) {
-            throw new \InvalidArgumentException('At least one file path must be specified');
+            throw new InvalidArgumentException('At least one file path must be specified');
         }
 
         if (count($filePaths) > 100) {
-            throw new \InvalidArgumentException('Too many files to scan (max 100)');
+            throw new InvalidArgumentException('Too many files to scan (max 100)');
         }
 
         foreach ($filePaths as $filePath) {
             if (!is_string($filePath)) {
-                throw new \InvalidArgumentException('File path must be a string');
+                throw new InvalidArgumentException('File path must be a string');
             }
 
             if (strlen($filePath) > 500) {
-                throw new \InvalidArgumentException('File path too long');
+                throw new InvalidArgumentException('File path too long');
             }
 
             if (str_contains($filePath, "\0") || str_contains($filePath, '..')) {
-                throw new \InvalidArgumentException('File path contains invalid characters');
+                throw new InvalidArgumentException('File path contains invalid characters');
             }
         }
     }
@@ -770,7 +776,7 @@ final class ServiceDiscovery
     /**
      * Create file filter for iterator
      */
-    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveCallbackFilterIterator $iterator): bool
+    private function createFileFilter(SplFileInfo $file, string $key, RecursiveCallbackFilterIterator $iterator): bool
     {
         $filename = $file->getFilename();
 

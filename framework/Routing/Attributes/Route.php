@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Routing\Attributes;
 
 use Attribute;
+use InvalidArgumentException;
 
 /**
  * Optimized Route attribute for PHP 8.4
@@ -75,11 +76,11 @@ final class Route
         $normalizedMethod = strtoupper(trim($method));
 
         if ($normalizedMethod === '') {
-            throw new \InvalidArgumentException('HTTP method cannot be empty');
+            throw new InvalidArgumentException('HTTP method cannot be empty');
         }
 
         if (!in_array($normalizedMethod, $allowedMethods, true)) {
-            throw new \InvalidArgumentException("Invalid HTTP method: {$method}");
+            throw new InvalidArgumentException("Invalid HTTP method: {$method}");
         }
 
         $this->method = $normalizedMethod;
@@ -91,15 +92,15 @@ final class Route
     private function validatePath(string $path): void
     {
         if (strlen($path) === 0) {
-            throw new \InvalidArgumentException('Path cannot be empty');
+            throw new InvalidArgumentException('Path cannot be empty');
         }
 
         if (!str_starts_with($path, '/')) {
-            throw new \InvalidArgumentException('Path must start with /');
+            throw new InvalidArgumentException('Path must start with /');
         }
 
         if (strlen($path) > 2048) {
-            throw new \InvalidArgumentException('Path too long (max 2048 characters)');
+            throw new InvalidArgumentException('Path too long (max 2048 characters)');
         }
 
         // Security checks
@@ -112,7 +113,7 @@ final class Route
 
         foreach ($dangerousPatterns as $pattern) {
             if (preg_match($pattern, $path)) {
-                throw new \InvalidArgumentException('Path contains dangerous sequences');
+                throw new InvalidArgumentException('Path contains dangerous sequences');
             }
         }
 
@@ -130,11 +131,11 @@ final class Route
     private function validateParameterName(string $param): void
     {
         if (strlen($param) === 0) {
-            throw new \InvalidArgumentException('Parameter name cannot be empty');
+            throw new InvalidArgumentException('Parameter name cannot be empty');
         }
 
         if (strlen($param) > 50) {
-            throw new \InvalidArgumentException("Parameter name too long: {$param}");
+            throw new InvalidArgumentException("Parameter name too long: {$param}");
         }
 
         // ✅ Support for constraints: name:constraint format
@@ -143,13 +144,13 @@ final class Route
 
             // Validate parameter name part
             if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name)) {
-                throw new \InvalidArgumentException("Invalid parameter name: {$name}");
+                throw new InvalidArgumentException("Invalid parameter name: {$name}");
             }
 
             // Validate constraint part
             $validConstraints = ['int', 'integer', 'uuid', 'slug', 'alpha', 'alnum'];
             if (!in_array($constraint, $validConstraints, true)) {
-                throw new \InvalidArgumentException("Invalid parameter constraint: {$constraint}. Valid constraints: " . implode(', ', $validConstraints));
+                throw new InvalidArgumentException("Invalid parameter constraint: {$constraint}. Valid constraints: " . implode(', ', $validConstraints));
             }
 
             // Check for reserved parameter names
@@ -159,7 +160,7 @@ final class Route
 
         // Standard parameter without constraint
         if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $param)) {
-            throw new \InvalidArgumentException("Invalid parameter name: {$param}");
+            throw new InvalidArgumentException("Invalid parameter name: {$param}");
         }
 
         $this->checkReservedParameterName($param);
@@ -176,7 +177,7 @@ final class Route
         ];
 
         if (in_array(strtolower($name), $reserved, true)) {
-            throw new \InvalidArgumentException("Reserved parameter name: {$name}");
+            throw new InvalidArgumentException("Reserved parameter name: {$name}");
         }
     }
 
@@ -186,20 +187,20 @@ final class Route
     private function validateMiddleware(array $middleware): void
     {
         if (count($middleware) > 10) {
-            throw new \InvalidArgumentException('Too many middleware (max 10)');
+            throw new InvalidArgumentException('Too many middleware (max 10)');
         }
 
         foreach ($middleware as $mw) {
             if (!is_string($mw)) {
-                throw new \InvalidArgumentException('Middleware must be strings');
+                throw new InvalidArgumentException('Middleware must be strings');
             }
 
             if (strlen($mw) === 0 || strlen($mw) > 100) {
-                throw new \InvalidArgumentException('Invalid middleware name length');
+                throw new InvalidArgumentException('Invalid middleware name length');
             }
 
             if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $mw)) {
-                throw new \InvalidArgumentException("Invalid middleware name: {$mw}");
+                throw new InvalidArgumentException("Invalid middleware name: {$mw}");
             }
         }
     }
@@ -214,15 +215,15 @@ final class Route
         }
 
         if (strlen($name) === 0) {
-            throw new \InvalidArgumentException('Route name cannot be empty string');
+            throw new InvalidArgumentException('Route name cannot be empty string');
         }
 
         if (strlen($name) > 255) {
-            throw new \InvalidArgumentException('Route name too long (max 255 characters)');
+            throw new InvalidArgumentException('Route name too long (max 255 characters)');
         }
 
         if (!preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
-            throw new \InvalidArgumentException('Route name contains invalid characters');
+            throw new InvalidArgumentException('Route name contains invalid characters');
         }
     }
 
@@ -236,21 +237,21 @@ final class Route
         }
 
         if (strlen($subdomain) === 0) {
-            throw new \InvalidArgumentException('Subdomain cannot be empty string');
+            throw new InvalidArgumentException('Subdomain cannot be empty string');
         }
 
         if (strlen($subdomain) > 63) {
-            throw new \InvalidArgumentException('Subdomain too long (max 63 characters)');
+            throw new InvalidArgumentException('Subdomain too long (max 63 characters)');
         }
 
         // RFC 1123 hostname validation
         if (!preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain)) {
-            throw new \InvalidArgumentException('Invalid subdomain format');
+            throw new InvalidArgumentException('Invalid subdomain format');
         }
 
         // Check for dangerous characters
         if (preg_match('/[<>"\'\0&;]/', $subdomain)) {
-            throw new \InvalidArgumentException('Subdomain contains dangerous characters');
+            throw new InvalidArgumentException('Subdomain contains dangerous characters');
         }
     }
 
@@ -266,7 +267,7 @@ final class Route
 
         foreach ($options as $key => $value) {
             if (!is_string($key) || strlen($key) > 50) {
-                throw new \InvalidArgumentException('Invalid option key');
+                throw new InvalidArgumentException('Invalid option key');
             }
 
             if (!in_array($key, $allowedOptions, true)) {
@@ -292,7 +293,7 @@ final class Route
     private function validateBooleanOrIntOption(mixed $value, string $optionName): void
     {
         if (!is_bool($value) && !is_int($value)) {
-            throw new \InvalidArgumentException("{$optionName} option must be boolean or integer");
+            throw new InvalidArgumentException("{$optionName} option must be boolean or integer");
         }
     }
 
@@ -302,7 +303,7 @@ final class Route
     private function validateTimeoutOption(mixed $value): void
     {
         if (!is_int($value) || $value < 1 || $value > 3600) {
-            throw new \InvalidArgumentException('Timeout must be integer between 1 and 3600');
+            throw new InvalidArgumentException('Timeout must be integer between 1 and 3600');
         }
     }
 
@@ -312,7 +313,7 @@ final class Route
     private function validatePriorityOption(mixed $value): void
     {
         if (!is_int($value) || $value < 1 || $value > 100) {
-            throw new \InvalidArgumentException('Priority must be integer between 1 and 100');
+            throw new InvalidArgumentException('Priority must be integer between 1 and 100');
         }
     }
 
@@ -322,7 +323,7 @@ final class Route
     private function validateBooleanOption(mixed $value, string $optionName): void
     {
         if (!is_bool($value)) {
-            throw new \InvalidArgumentException("{$optionName} option must be boolean");
+            throw new InvalidArgumentException("{$optionName} option must be boolean");
         }
     }
 
@@ -334,12 +335,12 @@ final class Route
         $allowedSchemes = ['http', 'https'];
 
         if (empty($schemes)) {
-            throw new \InvalidArgumentException('At least one scheme must be specified');
+            throw new InvalidArgumentException('At least one scheme must be specified');
         }
 
         foreach ($schemes as $scheme) {
             if (!is_string($scheme) || !in_array(strtolower($scheme), $allowedSchemes, true)) {
-                throw new \InvalidArgumentException("Invalid scheme: {$scheme}");
+                throw new InvalidArgumentException("Invalid scheme: {$scheme}");
             }
         }
     }
@@ -351,7 +352,7 @@ final class Route
     {
         foreach ($methods as $method) {
             if (!is_string($method)) {
-                throw new \InvalidArgumentException('Methods must be strings');
+                throw new InvalidArgumentException('Methods must be strings');
             }
             $this->validateMethod($method);
         }

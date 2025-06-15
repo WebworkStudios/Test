@@ -5,6 +5,8 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
+use InvalidArgumentException;
+
 /**
  * Optimized Route Information class with PHP 8.4 features
  */
@@ -50,38 +52,38 @@ final class RouteInfo
         // Validate method
         $allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
         if (!in_array($this->method, $allowedMethods, true)) {
-            throw new \InvalidArgumentException("Invalid HTTP method: {$this->method}");
+            throw new InvalidArgumentException("Invalid HTTP method: {$this->method}");
         }
 
         // Validate path
         if (!str_starts_with($this->originalPath, '/')) {
-            throw new \InvalidArgumentException("Path must start with /");
+            throw new InvalidArgumentException("Path must start with /");
         }
 
         if (strlen($this->originalPath) > 2048) {
-            throw new \InvalidArgumentException("Path too long");
+            throw new InvalidArgumentException("Path too long");
         }
 
         // Validate action class
         if (!class_exists($this->actionClass)) {
-            throw new \InvalidArgumentException("Action class does not exist: {$this->actionClass}");
+            throw new InvalidArgumentException("Action class does not exist: {$this->actionClass}");
         }
 
         // Validate middleware
         if (count($this->middleware) > 10) {
-            throw new \InvalidArgumentException("Too many middleware (max 10)");
+            throw new InvalidArgumentException("Too many middleware (max 10)");
         }
 
         foreach ($this->middleware as $mw) {
             if (!is_string($mw) || strlen($mw) > 100) {
-                throw new \InvalidArgumentException("Invalid middleware specification");
+                throw new InvalidArgumentException("Invalid middleware specification");
             }
         }
 
         // Validate name
         if ($this->name !== null) {
             if (strlen($this->name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $this->name)) {
-                throw new \InvalidArgumentException("Invalid route name: {$this->name}");
+                throw new InvalidArgumentException("Invalid route name: {$this->name}");
             }
         }
 
@@ -89,7 +91,7 @@ final class RouteInfo
         if ($this->subdomain !== null) {
             if (strlen($this->subdomain) > 63 ||
                 !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $this->subdomain)) {
-                throw new \InvalidArgumentException("Invalid subdomain: {$this->subdomain}");
+                throw new InvalidArgumentException("Invalid subdomain: {$this->subdomain}");
             }
         }
     }
@@ -152,6 +154,7 @@ final class RouteInfo
 
         return '#^' . $pattern . '$#';
     }
+
     /**
      * Get regex pattern for parameter constraints
      */
@@ -254,7 +257,7 @@ final class RouteInfo
         }
 
         if (!preg_match($this->pattern, $path, $matches)) {
-            throw new \InvalidArgumentException("Path does not match route pattern");
+            throw new InvalidArgumentException("Path does not match route pattern");
         }
 
         $params = [];
@@ -272,11 +275,11 @@ final class RouteInfo
     private function sanitizeParameterValue(string $value): string
     {
         if (strlen($value) > 255) {
-            throw new \InvalidArgumentException("Parameter value too long");
+            throw new InvalidArgumentException("Parameter value too long");
         }
 
         if (str_contains($value, "\0")) {
-            throw new \InvalidArgumentException("Parameter contains null bytes");
+            throw new InvalidArgumentException("Parameter contains null bytes");
         }
 
         return $value;
@@ -296,7 +299,7 @@ final class RouteInfo
 
         // Check for missing parameters
         if (preg_match('/{[^}]+}/', $url)) {
-            throw new \InvalidArgumentException("Missing required parameters for route");
+            throw new InvalidArgumentException("Missing required parameters for route");
         }
 
         return $url;

@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use Exception;
 use Framework\Container\Psr\ContainerExceptionInterface;
-use Framework\Container\Psr\NotFoundExceptionInterface;
+use Throwable;
 
 /**
  * Framework Container Exception mit PHP 8.4 Features
@@ -13,7 +14,7 @@ use Framework\Container\Psr\NotFoundExceptionInterface;
  * Vereinfachte Exception-Klasse mit besserer Fehlerdiagnose
  * und optimierter Performance.
  */
-class ContainerException extends \Exception implements ContainerExceptionInterface
+class ContainerException extends Exception implements ContainerExceptionInterface
 {
     // Property Hooks für computed properties
     public bool $hasContext {
@@ -42,11 +43,11 @@ class ContainerException extends \Exception implements ContainerExceptionInterfa
     private ?string $serviceId = null;
 
     public function __construct(
-        string      $message = '',
-        int         $code = 0,
-        ?\Throwable $previous = null,
-        array       $context = [],
-        ?string     $serviceId = null
+        string     $message = '',
+        int        $code = 0,
+        ?Throwable $previous = null,
+        array      $context = [],
+        ?string    $serviceId = null
     )
     {
         parent::__construct($message, $code, $previous);

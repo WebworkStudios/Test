@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Container\Attributes;
 
 use Attribute;
+use InvalidArgumentException;
 
 /**
  * Mark a class as a service to be auto-registered in the container mit PHP 8.4 Features
@@ -87,7 +88,7 @@ final class Service
     {
         match ($this->scope) {
             'singleton', 'transient', 'request', 'session' => null,
-            default => throw new \InvalidArgumentException("Invalid scope: {$this->scope}")
+            default => throw new InvalidArgumentException("Invalid scope: {$this->scope}")
         };
     }
 
@@ -102,13 +103,13 @@ final class Service
 
         match (true) {
             empty($this->id) =>
-            throw new \InvalidArgumentException('Service ID cannot be empty string'),
+            throw new InvalidArgumentException('Service ID cannot be empty string'),
             strlen($this->id) > 255 =>
-            throw new \InvalidArgumentException('Service ID too long (max 255 characters)'),
+            throw new InvalidArgumentException('Service ID too long (max 255 characters)'),
             str_contains($this->id, '..') =>
-            throw new \InvalidArgumentException('Service ID cannot contain ".."'),
+            throw new InvalidArgumentException('Service ID cannot contain ".."'),
             !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $this->id) =>
-            throw new \InvalidArgumentException('Invalid service ID format'),
+            throw new InvalidArgumentException('Invalid service ID format'),
             default => null
         };
     }
@@ -119,19 +120,19 @@ final class Service
     private function validateTags(): void
     {
         if (count($this->tags) > 10) {
-            throw new \InvalidArgumentException('Too many tags (max 10)');
+            throw new InvalidArgumentException('Too many tags (max 10)');
         }
 
         foreach ($this->tags as $tag) {
             match (true) {
                 !is_string($tag) =>
-                throw new \InvalidArgumentException('Tags must be strings'),
+                throw new InvalidArgumentException('Tags must be strings'),
                 empty($tag) =>
-                throw new \InvalidArgumentException('Tag cannot be empty'),
+                throw new InvalidArgumentException('Tag cannot be empty'),
                 strlen($tag) > 100 =>
-                throw new \InvalidArgumentException('Tag too long (max 100 characters)'),
+                throw new InvalidArgumentException('Tag too long (max 100 characters)'),
                 !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag) =>
-                throw new \InvalidArgumentException("Invalid tag format: {$tag}"),
+                throw new InvalidArgumentException("Invalid tag format: {$tag}"),
                 default => null
             };
         }
@@ -143,19 +144,19 @@ final class Service
     private function validateInterfaces(): void
     {
         if (count($this->interfaces) > 10) {
-            throw new \InvalidArgumentException('Too many interfaces (max 10)');
+            throw new InvalidArgumentException('Too many interfaces (max 10)');
         }
 
         foreach ($this->interfaces as $interface) {
             match (true) {
                 !is_string($interface) =>
-                throw new \InvalidArgumentException('Interfaces must be strings'),
+                throw new InvalidArgumentException('Interfaces must be strings'),
                 empty($interface) =>
-                throw new \InvalidArgumentException('Interface cannot be empty'),
+                throw new InvalidArgumentException('Interface cannot be empty'),
                 strlen($interface) > 255 =>
-                throw new \InvalidArgumentException('Interface name too long'),
+                throw new InvalidArgumentException('Interface name too long'),
                 !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*$/', $interface) =>
-                throw new \InvalidArgumentException("Invalid interface format: {$interface}"),
+                throw new InvalidArgumentException("Invalid interface format: {$interface}"),
                 default => null
             };
         }
@@ -168,9 +169,9 @@ final class Service
     {
         match (true) {
             $this->priority < 0 =>
-            throw new \InvalidArgumentException('Priority cannot be negative'),
+            throw new InvalidArgumentException('Priority cannot be negative'),
             $this->priority > 1000 =>
-            throw new \InvalidArgumentException('Priority too high (max 1000)'),
+            throw new InvalidArgumentException('Priority too high (max 1000)'),
             default => null
         };
     }
@@ -399,31 +400,31 @@ final class Service
 
         try {
             $this->validateScope();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateId();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateTags();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateInterfaces();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validatePriority();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
@@ -456,7 +457,7 @@ final class Service
         try {
             $this->validateConstruction();
             return true;
-        } catch (\InvalidArgumentException) {
+        } catch (InvalidArgumentException) {
             return false;
         }
     }

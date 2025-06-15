@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use InvalidArgumentException;
+use ReflectionClass;
+use ReflectionNamedType;
+
 /**
  * Contextual Binding Needs Builder mit PHP 8.4 Features
  *
@@ -25,7 +29,7 @@ final readonly class ContextualBindingNeedsBuilder
     public function giveTagged(string $tag): void
     {
         if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
-            throw new \InvalidArgumentException("Invalid tag format: {$tag}");
+            throw new InvalidArgumentException("Invalid tag format: {$tag}");
         }
 
         $this->give(function (Container $container) use ($tag) {
@@ -59,11 +63,11 @@ final readonly class ContextualBindingNeedsBuilder
     {
         match (true) {
             is_null($implementation) =>
-            throw new \InvalidArgumentException('Implementation cannot be null'),
+            throw new InvalidArgumentException('Implementation cannot be null'),
             is_string($implementation) && empty($implementation) =>
-            throw new \InvalidArgumentException('Implementation string cannot be empty'),
+            throw new InvalidArgumentException('Implementation string cannot be empty'),
             is_string($implementation) && str_contains($implementation, '..') =>
-            throw new \InvalidArgumentException('Implementation cannot contain ".."'),
+            throw new InvalidArgumentException('Implementation cannot contain ".."'),
             default => null
         };
     }
@@ -74,7 +78,7 @@ final readonly class ContextualBindingNeedsBuilder
     public function giveAllTagged(string $tag): void
     {
         if (empty($tag) || !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag)) {
-            throw new \InvalidArgumentException("Invalid tag format: {$tag}");
+            throw new InvalidArgumentException("Invalid tag format: {$tag}");
         }
 
         $this->give(function (Container $container) use ($tag) {
@@ -94,7 +98,7 @@ final readonly class ContextualBindingNeedsBuilder
     public function giveFactory(callable $factory): void
     {
         if (!is_callable($factory)) {
-            throw new \InvalidArgumentException('Factory must be callable');
+            throw new InvalidArgumentException('Factory must be callable');
         }
 
         $this->give($factory);
@@ -114,12 +118,12 @@ final readonly class ContextualBindingNeedsBuilder
     public function giveWithConfig(string $className, array $config = []): void
     {
         if (!class_exists($className)) {
-            throw new \InvalidArgumentException("Class does not exist: {$className}");
+            throw new InvalidArgumentException("Class does not exist: {$className}");
         }
 
         $this->give(function (Container $container) use ($className, $config) {
             // Create instance with config
-            $reflection = new \ReflectionClass($className);
+            $reflection = new ReflectionClass($className);
 
             if (!$reflection->isInstantiable()) {
                 throw ContainerException::cannotResolve($className, 'Class is not instantiable');
@@ -143,7 +147,7 @@ final readonly class ContextualBindingNeedsBuilder
                 } else {
                     // Try to resolve from container
                     $type = $parameter->getType();
-                    if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+                    if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
                         $parameters[] = $container->resolve($type->getName());
                     } else {
                         throw ContainerException::cannotResolve(

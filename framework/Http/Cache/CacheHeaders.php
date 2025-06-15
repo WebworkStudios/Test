@@ -5,6 +5,8 @@ declare(strict_types=1);
 
 namespace framework\Http\Cache;
 
+use DateMalformedStringException;
+use DateTimeImmutable;
 use Framework\Http\Headers;
 
 /**
@@ -22,11 +24,11 @@ final readonly class CacheHeaders
      * Generate cache headers for response
      */
     public static function forResponse(
-        ?string             $etag = null,
-        ?\DateTimeImmutable $lastModified = null,
-        int                 $maxAge = 0,
-        bool                $public = true,
-        bool                $mustRevalidate = false
+        ?string            $etag = null,
+        ?DateTimeImmutable $lastModified = null,
+        int                $maxAge = 0,
+        bool               $public = true,
+        bool               $mustRevalidate = false
     ): array
     {
         $headers = [];
@@ -60,7 +62,7 @@ final readonly class CacheHeaders
     /**
      * Check if resource is fresh (not modified)
      */
-    public function isFresh(string $etag, \DateTimeImmutable $lastModified): bool
+    public function isFresh(string $etag, DateTimeImmutable $lastModified): bool
     {
         // Check ETag first (stronger validator)
         $clientEtag = $this->getIfNoneMatch();
@@ -88,7 +90,7 @@ final readonly class CacheHeaders
     /**
      * Check if request has If-Modified-Since header
      */
-    public function getIfModifiedSince(): ?\DateTimeImmutable
+    public function getIfModifiedSince(): ?DateTimeImmutable
     {
         $header = $this->headers->get('if-modified-since');
         if (!$header) {
@@ -96,8 +98,8 @@ final readonly class CacheHeaders
         }
 
         try {
-            return new \DateTimeImmutable($header);
-        } catch (\DateMalformedStringException) {
+            return new DateTimeImmutable($header);
+        } catch (DateMalformedStringException) {
             return null;
         }
     }

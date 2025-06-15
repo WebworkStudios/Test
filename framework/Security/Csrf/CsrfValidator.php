@@ -5,6 +5,8 @@ declare(strict_types=1);
 
 namespace Framework\Security\Csrf;
 
+use Framework\Http\Request;
+
 /**
  * Separate CSRF Validierung für bessere Testbarkeit
  */
@@ -57,7 +59,7 @@ final readonly class CsrfValidator
      * Validate token from HTTP request
      */
     public function validateFromRequest(
-        \Framework\Http\Request $request,
+        Request $request,
         string                  $action = 'default',
         bool                    $consume = true
     ): bool
@@ -81,7 +83,7 @@ final readonly class CsrfValidator
     /**
      * Extract token from various request sources
      */
-    private function extractTokenFromRequest(\Framework\Http\Request $request): ?string
+    private function extractTokenFromRequest(Request $request): ?string
     {
         return $request->input('_token')
             ?? $request->header('x-csrf-token')

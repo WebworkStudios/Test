@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Framework\Security\Csrf;
 
+use Framework\Http\Request;
+
 interface CsrfProtectionInterface
 {
     public function generateToken(?string $action = 'default'): string;
@@ -14,7 +16,7 @@ interface CsrfProtectionInterface
 
     public function validateAndConsume(string $token, ?string $action = 'default'): bool;
 
-    public function validateFromRequest(\Framework\Http\Request $request, ?string $action = 'default', bool $consume = true): bool;
+    public function validateFromRequest(Request $request, ?string $action = 'default', bool $consume = true): bool;
 
     public function consumeToken(?string $action = 'default'): void;
 

@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Framework\Container\Attributes;
 
 use Attribute;
+use InvalidArgumentException;
+use JsonException;
+use RuntimeException;
+use Throwable;
 
 /**
  * Mark a parameter to be injected with a configuration value mit PHP 8.4 Features
@@ -84,19 +88,19 @@ final class Config
     {
         match (true) {
             empty($this->key) =>
-            throw new \InvalidArgumentException('Config key cannot be empty'),
+            throw new InvalidArgumentException('Config key cannot be empty'),
             strlen($this->key) > 255 =>
-            throw new \InvalidArgumentException('Config key too long (max 255 characters)'),
+            throw new InvalidArgumentException('Config key too long (max 255 characters)'),
             str_contains($this->key, '..') =>
-            throw new \InvalidArgumentException('Config key cannot contain ".."'),
+            throw new InvalidArgumentException('Config key cannot contain ".."'),
             str_contains($this->key, '/') =>
-            throw new \InvalidArgumentException('Config key cannot contain "/"'),
+            throw new InvalidArgumentException('Config key cannot contain "/"'),
             str_contains($this->key, '\\') =>
-            throw new \InvalidArgumentException('Config key cannot contain "\\"'),
+            throw new InvalidArgumentException('Config key cannot contain "\\"'),
             !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $this->key) =>
-            throw new \InvalidArgumentException('Invalid config key format'),
+            throw new InvalidArgumentException('Invalid config key format'),
             $this->keyDepth > 10 =>
-            throw new \InvalidArgumentException('Config key too deep (max 10 levels)'),
+            throw new InvalidArgumentException('Config key too deep (max 10 levels)'),
             default => null
         };
     }
@@ -112,11 +116,11 @@ final class Config
 
         match (true) {
             empty($this->env) =>
-            throw new \InvalidArgumentException('Environment variable name cannot be empty'),
+            throw new InvalidArgumentException('Environment variable name cannot be empty'),
             strlen($this->env) > 100 =>
-            throw new \InvalidArgumentException('Environment variable name too long'),
+            throw new InvalidArgumentException('Environment variable name too long'),
             !preg_match('/^[A-Z_][A-Z0-9_]*$/', $this->env) =>
-            throw new \InvalidArgumentException('Invalid environment variable name format'),
+            throw new InvalidArgumentException('Invalid environment variable name format'),
             default => null
         };
     }
@@ -127,7 +131,7 @@ final class Config
     private function validateTransform(): void
     {
         if ($this->transform !== null && !is_callable($this->transform)) {
-            throw new \InvalidArgumentException('Transform must be callable');
+            throw new InvalidArgumentException('Transform must be callable');
         }
     }
 
@@ -137,7 +141,7 @@ final class Config
     private function validateRequiredLogic(): void
     {
         if ($this->required && $this->default !== null) {
-            throw new \InvalidArgumentException('Required config cannot have default value');
+            throw new InvalidArgumentException('Required config cannot have default value');
         }
     }
 
@@ -285,7 +289,7 @@ final class Config
     {
         try {
             return json_decode($value, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
+        } catch (JsonException) {
             return $value; // Return as string if JSON parsing fails
         }
     }
@@ -301,8 +305,8 @@ final class Config
 
         try {
             return ($this->transform)($value);
-        } catch (\Throwable $e) {
-            throw new \RuntimeException(
+        } catch (Throwable $e) {
+            throw new RuntimeException(
                 "Transform function failed for config key '{$this->key}': " . $e->getMessage(),
                 previous: $e
             );
@@ -332,7 +336,7 @@ final class Config
     private function handleMissingValue(): mixed
     {
         if ($this->required) {
-            throw new \RuntimeException("Required config key '{$this->key}' not found");
+            throw new RuntimeException("Required config key '{$this->key}' not found");
         }
 
         return $this->transformValue($this->default);
@@ -451,25 +455,25 @@ final class Config
 
         try {
             $this->validateKey();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateEnvironmentVariable();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateTransform();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateRequiredLogic();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
@@ -500,7 +504,7 @@ final class Config
         try {
             $this->validateConstruction();
             return true;
-        } catch (\InvalidArgumentException) {
+        } catch (InvalidArgumentException) {
             return false;
         }
     }

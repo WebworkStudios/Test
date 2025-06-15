@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use InvalidArgumentException;
+use Throwable;
+
 /**
  * Contextual Binding Builder mit PHP 8.4 Features
  *
@@ -19,7 +22,7 @@ final readonly class ContextualBindingBuilder
     {
         // Validate context
         if (empty($this->context) || str_contains($this->context, '..')) {
-            throw new \InvalidArgumentException('Invalid context format');
+            throw new InvalidArgumentException('Invalid context format');
         }
     }
 
@@ -35,7 +38,7 @@ final readonly class ContextualBindingBuilder
 
             try {
                 $this->needs($abstract)->give($implementation);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 error_log("Failed to register contextual binding for '{$abstract}': " . $e->getMessage());
             }
         }
@@ -47,7 +50,7 @@ final readonly class ContextualBindingBuilder
     public function needs(string $abstract): ContextualBindingNeedsBuilder
     {
         if (empty($abstract) || str_contains($abstract, '..')) {
-            throw new \InvalidArgumentException('Invalid abstract format');
+            throw new InvalidArgumentException('Invalid abstract format');
         }
 
         return new ContextualBindingNeedsBuilder($this->container, $this->context, $abstract);

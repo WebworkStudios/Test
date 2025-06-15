@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use Framework\Container\ContainerInterface;
+use InvalidArgumentException;
 use Framework\Http\{Request, Response};
 use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
+use RuntimeException;
+use Throwable;
 
 /**
  * Optimized HTTP Router with PHP 8.4 features
@@ -124,30 +127,6 @@ final class Router
     }
 
     /**
-     * Auto-discover routes
-     */
-    public function autoDiscoverRoutes(array $directories = []): void
-    {
-        if ($this->discovery === null) {
-            throw new \RuntimeException('RouteDiscovery not configured');
-        }
-
-        if (empty($directories)) {
-            $directories = [
-                'app/Actions',
-                'app/Controllers',
-                'app/Http/Actions',
-                'app/Http/Controllers'
-            ];
-        }
-
-        $existingDirs = array_filter($directories, 'is_dir');
-        if (!empty($existingDirs)) {
-            $this->discovery->discover($existingDirs);
-        }
-    }
-
-    /**
      * Create router with default configuration
      */
     public static function create(ContainerInterface $container, array $config = []): self
@@ -172,6 +151,30 @@ final class Router
     }
 
     /**
+     * Auto-discover routes
+     */
+    public function autoDiscoverRoutes(array $directories = []): void
+    {
+        if ($this->discovery === null) {
+            throw new RuntimeException('RouteDiscovery not configured');
+        }
+
+        if (empty($directories)) {
+            $directories = [
+                'app/Actions',
+                'app/Controllers',
+                'app/Http/Actions',
+                'app/Http/Controllers'
+            ];
+        }
+
+        $existingDirs = array_filter($directories, 'is_dir');
+        if (!empty($existingDirs)) {
+            $this->discovery->discover($existingDirs);
+        }
+    }
+
+    /**
      * Add route to router
      */
     public function addRoute(
@@ -183,8 +186,6 @@ final class Router
         ?string $subdomain = null
     ): void
     {
-
-
         $this->validateMiddleware($middleware);
         $this->validateRouteName($name);
         $this->validateSubdomain($subdomain);
@@ -207,7 +208,7 @@ final class Router
         // Store named route
         if ($name !== null) {
             if (isset($this->namedRoutes[$name])) {
-                throw new \InvalidArgumentException("Route name '{$name}' already exists");
+                throw new InvalidArgumentException("Route name '{$name}' already exists");
             }
             $this->namedRoutes[$name] = $routeInfo;
         }
@@ -224,12 +225,12 @@ final class Router
     private function validateMiddleware(array $middleware): void
     {
         if (count($middleware) > 10) {
-            throw new \InvalidArgumentException('Too many middleware (max 10)');
+            throw new InvalidArgumentException('Too many middleware (max 10)');
         }
 
         foreach ($middleware as $mw) {
             if (!is_string($mw) || strlen($mw) > 100) {
-                throw new \InvalidArgumentException('Invalid middleware specification');
+                throw new InvalidArgumentException('Invalid middleware specification');
             }
         }
     }
@@ -244,7 +245,7 @@ final class Router
         }
 
         if (strlen($name) > 255 || !preg_match('/^[a-zA-Z0-9._-]+$/', $name)) {
-            throw new \InvalidArgumentException("Invalid route name: {$name}");
+            throw new InvalidArgumentException("Invalid route name: {$name}");
         }
     }
 
@@ -254,7 +255,7 @@ final class Router
     private function validateSubdomain(?string $subdomain): void
     {
         if ($subdomain !== null && !$this->isValidSubdomain($subdomain)) {
-            throw new \InvalidArgumentException("Invalid subdomain: {$subdomain}");
+            throw new InvalidArgumentException("Invalid subdomain: {$subdomain}");
         }
     }
 
@@ -282,17 +283,12 @@ final class Router
     /**
      * Dispatch HTTP request
      */
-// In framework/Routing/Router.php - dispatch() Methode erweitern
     public function dispatch(Request $request): Response
     {
         $startTime = hrtime(true);
         $this->dispatchCount++;
 
         try {
-            error_log("=== ROUTER DISPATCH START ===");
-            error_log("Request: {$request->method} {$request->path}");
-            error_log("Host: {$request->host()}");
-
             $this->validateRequest($request);
             $this->compileRoutes();
 
@@ -300,14 +296,21 @@ final class Router
             $path = $this->sanitizePath($request->path);
             $subdomain = $this->extractSubdomain($request->host());
 
-            error_log("Normalized: {$method} {$path} (subdomain: " . ($subdomain ?? 'none') . ")");
+            // Debug nur bei spezifischen Problemen
+            if ($this->debugMode && ($path === '/user/123' || str_contains($path, 'E:'))) {
+                error_log("=== ROUTER DEBUG ===");
+                error_log("Raw URI: {$request->uri}");
+                error_log("Raw path: {$request->path}");
+                error_log("Sanitized path: {$path}");
+                error_log("Method: {$method}");
+                error_log("Host: {$request->host()}");
+                error_log("Subdomain: " . ($subdomain ?? 'none'));
+            }
 
             // Check cache first
             $cacheKey = $this->generateCacheKey($method, $path, $subdomain);
-            error_log("Cache key: {$cacheKey}");
 
             if (isset($this->routeCache[$cacheKey])) {
-                error_log("Cache HIT");
                 $cachedRoute = $this->routeCache[$cacheKey];
                 if ($this->isCacheValid($cachedRoute, $request)) {
                     $this->cacheHits++;
@@ -315,36 +318,31 @@ final class Router
                     return $this->callAction($cachedRoute['route']->actionClass, $request, $params);
                 } else {
                     unset($this->routeCache[$cacheKey]);
-                    error_log("Cache INVALID");
                 }
-            } else {
-                error_log("Cache MISS");
             }
 
             // Find matching route
-            error_log("Looking for matching route...");
             $matchResult = $this->findMatchingRoute($method, $path, $subdomain);
 
             if ($matchResult === null) {
-                error_log("❌ NO MATCHING ROUTE FOUND");
                 $this->handleNoMatch($method, $path, $subdomain);
             }
 
             [$route, $params] = $matchResult;
-            error_log("✅ Route found: {$route->actionClass}");
-            error_log("Parameters: " . json_encode($params));
 
             // Cache successful match
             $this->cacheMatch($cacheKey, $route, $params);
 
             return $this->callAction($route->actionClass, $request, $params);
 
-        } catch (\Throwable $e) {
-            error_log("Router dispatch error: " . $e->getMessage());
+        } catch (Throwable $e) {
+            if ($this->debugMode) {
+                error_log("Router dispatch error: " . $e->getMessage());
+                error_log("Stack trace: " . $e->getTraceAsString());
+            }
             throw $e;
         } finally {
             $this->totalDispatchTime += (hrtime(true) - $startTime) / 1_000_000;
-            error_log("=== ROUTER DISPATCH END ===");
         }
     }
 
@@ -354,15 +352,20 @@ final class Router
     private function validateRequest(Request $request): void
     {
         if (strlen($request->path) > 2048) {
-            throw new \InvalidArgumentException("Request path too long");
+            throw new InvalidArgumentException("Request path too long");
         }
 
         if (str_contains($request->path, "\0") || str_contains($request->uri, "\0")) {
-            throw new \InvalidArgumentException("Request contains null bytes");
+            throw new InvalidArgumentException("Request contains null bytes");
+        }
+
+        // Check for absolute paths (Windows drive letters)
+        if (preg_match('/^[A-Z]:/i', $request->path) || preg_match('/^[A-Z]:/i', $request->uri)) {
+            throw new InvalidArgumentException("Absolute file paths not allowed in URL");
         }
 
         if (!$this->isValidHost($request->host())) {
-            throw new \InvalidArgumentException("Invalid host header");
+            throw new InvalidArgumentException("Invalid host header");
         }
     }
 
@@ -374,7 +377,7 @@ final class Router
         $hostWithoutPort = explode(':', $host)[0];
 
         // Allow localhost for development
-        if ($hostWithoutPort === 'localhost' || str_ends_with($hostWithoutPort, '.localhost')) {
+        if ($hostWithoutPort === 'localhost' || str_ends_with($hostWithoutPort, '.localhost') || str_ends_with($hostWithoutPort, '.local')) {
             return true;
         }
 
@@ -468,16 +471,32 @@ final class Router
     }
 
     /**
-     * Sanitize path
+     * Sanitize path with improved Windows path detection
      */
     private function sanitizePath(string $path): string
     {
         // Remove dangerous sequences
-        $cleaned = str_replace(['../', '.\\', '..\\'], '', $path);
+        $cleaned = str_replace(['../', '.\\', '..\\', "\0"], '', $path);
+
+        // Handle Windows drive letters (absolute paths) - reject immediately
+        if (preg_match('/^[A-Z]:/i', $cleaned)) {
+            throw new InvalidArgumentException('Absolute file paths not allowed in URL');
+        }
+
+        // Remove any backslashes (Windows path separators)
+        $cleaned = str_replace('\\', '/', $cleaned);
 
         // Ensure path starts with /
         if (!str_starts_with($cleaned, '/')) {
             $cleaned = '/' . $cleaned;
+        }
+
+        // Remove double slashes
+        $cleaned = preg_replace('#/+#', '/', $cleaned);
+
+        // Additional validation
+        if (strlen($cleaned) > 2048) {
+            throw new InvalidArgumentException('Path too long');
         }
 
         return $cleaned;
@@ -486,29 +505,39 @@ final class Router
     /**
      * Extract subdomain from host
      */
+    /**
+     * Extract subdomain from host - korrigierte Version
+     */
     private function extractSubdomain(string $host): ?string
     {
         $hostWithoutPort = explode(':', $host)[0];
 
-        // Handle localhost
+        // Handle localhost und IP-Adressen - KEINE Subdomain
         if ($hostWithoutPort === 'localhost' || filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
+            return null;
+        }
+
+        // Handle .local domains (Development) - KEINE Subdomain-Extraktion
+        if (str_ends_with($hostWithoutPort, '.local')) {
+            // Für .local domains extrahieren wir KEINE Subdomain
+            // kickerscup.local -> null (nicht "kickerscup")
             return null;
         }
 
         // Handle .localhost domains
         if (str_ends_with($hostWithoutPort, '.localhost')) {
             $parts = explode('.', $hostWithoutPort);
-            if (count($parts) >= 2 && $parts[count($parts) - 1] === 'localhost') {
+            if (count($parts) >= 3) { // Nur echte Subdomains wie api.app.localhost
                 $subdomain = $parts[0];
                 return $this->isValidSubdomain($subdomain) ? $subdomain : null;
             }
-            return null;
+            return null; // app.localhost -> null
         }
 
-        // Handle regular domains
+        // Handle production domains (mindestens 3 Teile für Subdomain)
         $parts = explode('.', $hostWithoutPort);
         if (count($parts) < 3) {
-            return null;
+            return null; // example.com -> null
         }
 
         $subdomain = $parts[0];
@@ -516,8 +545,9 @@ final class Router
             return null;
         }
 
+        // In production strict mode checken
         if ($this->strictMode && !in_array($subdomain, $this->allowedSubdomains, true)) {
-            throw new \InvalidArgumentException("Subdomain not allowed: {$subdomain}");
+            throw new InvalidArgumentException("Subdomain not allowed: {$subdomain}");
         }
 
         return $subdomain;
@@ -550,13 +580,13 @@ final class Router
         $action = $this->container->get($actionClass);
 
         if (!is_callable($action)) {
-            throw new \RuntimeException("Action {$actionClass} is not callable");
+            throw new RuntimeException("Action {$actionClass} is not callable");
         }
 
         try {
             $result = $action($request, $params);
             return $this->convertToResponse($result);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if ($this->debugMode) {
                 error_log("Action execution error in {$actionClass}: " . $e->getMessage());
             }
@@ -570,12 +600,12 @@ final class Router
     private function validateActionCall(string $actionClass, array $params): void
     {
         if (count($params) > 20) {
-            throw new \InvalidArgumentException("Too many route parameters");
+            throw new InvalidArgumentException("Too many route parameters");
         }
 
         foreach ($params as $key => $value) {
             if (strlen($key) > 50 || strlen((string)$value) > 1000) {
-                throw new \InvalidArgumentException("Parameter too large: {$key}");
+                throw new InvalidArgumentException("Parameter too large: {$key}");
             }
         }
     }
@@ -595,57 +625,71 @@ final class Router
     /**
      * Find matching route
      */
-// In framework/Routing/Router.php - findMatchingRoute() erweitern
     private function findMatchingRoute(string $method, string $path, ?string $subdomain): ?array
     {
-        error_log("=== FINDING MATCHING ROUTE ===");
-        error_log("Looking for: {$method} {$path} (subdomain: " . ($subdomain ?? 'none') . ")");
+        if ($this->debugMode && ($path === '/user/123' || str_contains($path, 'user'))) {
+            error_log("=== FINDING MATCHING ROUTE ===");
+            error_log("Looking for: {$method} {$path} (subdomain: " . ($subdomain ?? 'none') . ")");
+        }
 
         if (!isset($this->routes[$method])) {
-            error_log("❌ No routes for method: {$method}");
-            error_log("Available methods: " . implode(', ', array_keys($this->routes)));
+            if ($this->debugMode) {
+                error_log("❌ No routes for method: {$method}");
+                error_log("Available methods: " . implode(', ', array_keys($this->routes)));
+            }
             return null;
         }
 
-        error_log("Routes available for {$method}: " . count($this->routes[$method]));
+        if ($this->debugMode && str_contains($path, 'user')) {
+            error_log("Routes available for {$method}: " . count($this->routes[$method]));
+        }
 
         // Try static routes first (O(1) lookup)
         if (isset($this->staticRoutes[$method])) {
             $staticKey = $this->generateStaticKey($path, $subdomain);
-            error_log("Checking static routes with key: {$staticKey}");
 
             if (isset($this->staticRoutes[$method][$staticKey])) {
-                error_log("✅ Static route match found");
+                if ($this->debugMode && str_contains($path, 'user')) {
+                    error_log("✅ Static route match found");
+                }
                 return [$this->staticRoutes[$method][$staticKey], []];
-            } else {
-                error_log("No static route match");
             }
         }
 
         // Try dynamic routes
         if (isset($this->dynamicRoutes[$method])) {
-            error_log("Checking " . count($this->dynamicRoutes[$method]) . " dynamic routes");
+            if ($this->debugMode && str_contains($path, 'user')) {
+                error_log("Checking " . count($this->dynamicRoutes[$method]) . " dynamic routes");
+            }
 
             foreach ($this->dynamicRoutes[$method] as $index => $route) {
-                error_log("Testing route #{$index}: {$route->originalPath} -> {$route->actionClass}");
+                if ($this->debugMode && str_contains($path, 'user')) {
+                    error_log("Testing route #{$index}: {$route->originalPath} -> {$route->actionClass}");
+                }
 
                 if ($route->matches($method, $path, $subdomain)) {
-                    error_log("✅ Route matches! Extracting parameters...");
+                    if ($this->debugMode && str_contains($path, 'user')) {
+                        error_log("✅ Route matches! Extracting parameters...");
+                    }
                     try {
                         $params = $route->extractParams($path);
-                        error_log("Parameters extracted: " . json_encode($params));
+                        if ($this->debugMode && str_contains($path, 'user')) {
+                            error_log("Parameters extracted: " . json_encode($params));
+                        }
                         return [$route, $params];
-                    } catch (\InvalidArgumentException $e) {
-                        error_log("❌ Parameter extraction failed: " . $e->getMessage());
+                    } catch (InvalidArgumentException $e) {
+                        if ($this->debugMode) {
+                            error_log("❌ Parameter extraction failed: " . $e->getMessage());
+                        }
                         continue; // Try next route
                     }
-                } else {
-                    error_log("Route does not match");
                 }
             }
         }
 
-        error_log("❌ No matching route found");
+        if ($this->debugMode && str_contains($path, 'user')) {
+            error_log("❌ No matching route found");
+        }
         return null;
     }
 
@@ -723,7 +767,7 @@ final class Router
 
         // Check for missing parameters
         if (preg_match('/{[^}]+}/', $path)) {
-            throw new \InvalidArgumentException("Missing parameters for route '{$name}'");
+            throw new InvalidArgumentException("Missing parameters for route '{$name}'");
         }
 
         // Add subdomain if specified
@@ -741,7 +785,7 @@ final class Router
     private function sanitizeParameterKey(string $key): string
     {
         if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $key)) {
-            throw new \InvalidArgumentException("Invalid parameter key: {$key}");
+            throw new InvalidArgumentException("Invalid parameter key: {$key}");
         }
         return $key;
     }
@@ -754,11 +798,11 @@ final class Router
         $stringValue = (string)$value;
 
         if (strlen($stringValue) > 255) {
-            throw new \InvalidArgumentException("Parameter value too long");
+            throw new InvalidArgumentException("Parameter value too long");
         }
 
         if (str_contains($stringValue, "\0")) {
-            throw new \InvalidArgumentException("Parameter contains null bytes");
+            throw new InvalidArgumentException("Parameter contains null bytes");
         }
 
         return urlencode($stringValue);
@@ -853,7 +897,7 @@ final class Router
             foreach ($this->supportedMethods as $method) {
                 try {
                     $this->findMatchingRoute($method, $path, null);
-                } catch (\Throwable) {
+                } catch (Throwable) {
                     // Ignore errors during warm-up
                 }
             }
@@ -866,7 +910,7 @@ final class Router
     public function debugRoute(string $method, string $path, ?string $subdomain = null): array
     {
         if (!$this->debugMode) {
-            throw new \RuntimeException('Debug mode must be enabled');
+            throw new RuntimeException('Debug mode must be enabled');
         }
 
         $this->compileRoutes();
@@ -922,7 +966,7 @@ final class Router
                                 'params' => $routeDebug['extracted_params'],
                             ];
                         }
-                    } catch (\InvalidArgumentException $e) {
+                    } catch (InvalidArgumentException $e) {
                         $routeDebug['extraction_error'] = $e->getMessage();
                     }
                 }

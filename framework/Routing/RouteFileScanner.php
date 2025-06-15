@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
+use ReflectionClass;
+use ReflectionException;
+use ReflectionMethod;
+
 /**
  * Optimized file scanner for route discovery with PHP 8.4 features
  */
@@ -59,7 +63,7 @@ final class RouteFileScanner
         }
 
         try {
-            $reflection = new \ReflectionClass($className);
+            $reflection = new ReflectionClass($className);
 
             // Must be invokable (have __invoke method)
             if (!$reflection->hasMethod('__invoke')) {
@@ -73,7 +77,7 @@ final class RouteFileScanner
 
             return true;
 
-        } catch (\ReflectionException $e) {
+        } catch (ReflectionException $e) {
             if ($this->strictMode) {
                 throw $e;
             }
@@ -85,7 +89,7 @@ final class RouteFileScanner
     /**
      * Check class for security risks
      */
-    private function hasSecurityRisks(\ReflectionClass $reflection): bool
+    private function hasSecurityRisks(ReflectionClass $reflection): bool
     {
         // Check for dangerous methods
         $dangerousMethods = [
@@ -93,7 +97,7 @@ final class RouteFileScanner
             'file_get_contents', 'file_put_contents', 'fopen'
         ];
 
-        $methods = $reflection->getMethods(\ReflectionMethod::IS_PUBLIC);
+        $methods = $reflection->getMethods(ReflectionMethod::IS_PUBLIC);
         foreach ($methods as $method) {
             if (in_array($method->getName(), $dangerousMethods, true)) {
                 return true;

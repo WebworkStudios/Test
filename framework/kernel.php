@@ -5,9 +5,14 @@ namespace Framework;
 
 use Framework\Container\Container;
 use Framework\Http\{Request, Response};
-use Framework\Routing\{Router, RouteDiscovery};
-use Framework\Security\Csrf\CsrfProtection;
 use framework\Http\Session\Session;
+use Framework\Routing\{Exceptions\MethodNotAllowedException,
+    Exceptions\RouteNotFoundException,
+    RouteDiscovery,
+    RouteFileScanner,
+    Router};
+use Framework\Security\Csrf\CsrfProtection;
+use Throwable;
 
 /**
  * Framework Kernel - Core application orchestrator
@@ -95,11 +100,11 @@ final class Kernel
         }
 
         try {
-            $scanner = new \Framework\Routing\RouteFileScanner([
+            $scanner = new RouteFileScanner([
                 'strict_mode' => false
             ]);
 
-            $discovery = new \Framework\Routing\RouteDiscovery(
+            $discovery = new RouteDiscovery(
                 router: $router,
                 scanner: $scanner,
                 config: ['strict_mode' => false]
@@ -112,7 +117,7 @@ final class Kernel
                 error_log("✅ Discovery completed: {$stats['discovered_routes']} routes in {$stats['processed_files']} files");
             }
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if ($this->config['debug'] ?? false) {
                 error_log("❌ Route discovery failed: " . $e->getMessage());
             }
@@ -120,27 +125,19 @@ final class Kernel
     }
 
     /**
-     * Auto-discover routes in default directories
+     * Handle incoming HTTP request
      */
-    private function discoverRoutes(Router $router): void
+    public function handle(Request $request): Response
     {
-        $directories = $this->config['routing']['discovery_paths'] ?? [
-            'app/Actions',
-            'app/Controllers'
-        ];
-
-        $existingDirs = array_filter($directories, 'is_dir');
-        if (empty($existingDirs)) {
-            return;
-        }
+        $this->boot();
 
         try {
-            $discovery = RouteDiscovery::create($router);
-            $discovery->discover($existingDirs);
-        } catch (\Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("Route discovery failed: " . $e->getMessage());
-            }
+            // Get router and dispatch
+            $router = $this->container->get(Router::class);
+            return $router->dispatch($request);
+
+        } catch (Throwable $e) {
+            return $this->handleException($e, $request);
         }
     }
 
@@ -176,26 +173,9 @@ final class Kernel
     }
 
     /**
-     * Handle incoming HTTP request
-     */
-    public function handle(Request $request): Response
-    {
-        $this->boot();
-
-        try {
-            // Get router and dispatch
-            $router = $this->container->get(Router::class);
-            return $router->dispatch($request);
-
-        } catch (\Throwable $e) {
-            return $this->handleException($e, $request);
-        }
-    }
-
-    /**
      * Handle exceptions and convert to HTTP responses
      */
-    private function handleException(\Throwable $e, Request $request): Response
+    private function handleException(Throwable $e, Request $request): Response
     {
         // Log error in debug mode
         if ($this->config['debug'] ?? false) {
@@ -204,9 +184,9 @@ final class Kernel
 
         // Return appropriate HTTP response
         return match (true) {
-            $e instanceof \Framework\Routing\Exceptions\RouteNotFoundException =>
+            $e instanceof RouteNotFoundException =>
             Response::notFound('Route not found'),
-            $e instanceof \Framework\Routing\Exceptions\MethodNotAllowedException =>
+            $e instanceof MethodNotAllowedException =>
             Response::json(['error' => 'Method not allowed'], 405),
             default => Response::serverError(
                 ($this->config['debug'] ?? false) ? $e->getMessage() : 'Internal server error'
@@ -252,5 +232,30 @@ final class Kernel
         }
 
         $this->booted = false;
+    }
+
+    /**
+     * Auto-discover routes in default directories
+     */
+    private function discoverRoutes(Router $router): void
+    {
+        $directories = $this->config['routing']['discovery_paths'] ?? [
+            'app/Actions',
+            'app/Controllers'
+        ];
+
+        $existingDirs = array_filter($directories, 'is_dir');
+        if (empty($existingDirs)) {
+            return;
+        }
+
+        try {
+            $discovery = RouteDiscovery::create($router);
+            $discovery->discover($existingDirs);
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("Route discovery failed: " . $e->getMessage());
+            }
+        }
     }
 }

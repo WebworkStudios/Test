@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Framework\Security\Csrf;
 
+use Framework\Http\Request;
 use framework\Http\Session\SessionInterface;
 
 /**
@@ -61,7 +62,7 @@ final class CsrfProtection implements CsrfProtectionInterface
     }
 
     public function validateFromRequest(
-        \Framework\Http\Request $request,
+        Request $request,
         ?string                 $action = 'default',
         bool                    $consume = true
     ): bool

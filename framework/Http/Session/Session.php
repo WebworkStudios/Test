@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace framework\Http\Session;
 
+use InvalidArgumentException;
+use RuntimeException;
+
 /**
  * Optimized Session Management with clean separation of concerns
  */
@@ -83,7 +86,7 @@ class Session implements SessionInterface
         }
 
         if (!session_start()) {
-            throw new \RuntimeException('Failed to start session');
+            throw new RuntimeException('Failed to start session');
         }
 
         $this->started = true;
@@ -120,7 +123,7 @@ class Session implements SessionInterface
     private function destroyWithException(string $message): never
     {
         $this->destroy();
-        throw new \RuntimeException($message);
+        throw new RuntimeException($message);
     }
 
     /**
@@ -209,7 +212,7 @@ class Session implements SessionInterface
         $this->ensureStarted();
 
         if (!session_regenerate_id($deleteOld)) {
-            throw new \RuntimeException('Failed to regenerate session ID');
+            throw new RuntimeException('Failed to regenerate session ID');
         }
 
         $this->sessionId = session_id();
@@ -270,7 +273,7 @@ class Session implements SessionInterface
         // Validate size
         $serialized = serialize($value);
         if (strlen($serialized) > self::MAX_DATA_SIZE) {
-            throw new \InvalidArgumentException("Session data too large for key: {$key}");
+            throw new InvalidArgumentException("Session data too large for key: {$key}");
         }
 
         // Update cache and session

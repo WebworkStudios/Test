@@ -5,6 +5,7 @@ namespace Framework;
 
 use Framework\Container\Container;
 use Framework\Http\Request;
+use Throwable;
 
 /**
  * Main Application class - Entry point for the framework
@@ -37,15 +38,6 @@ final class Application
     }
 
     /**
-     * Create application with default configuration
-     */
-    public static function create(array $config = []): self
-    {
-        $container = new Container($config);
-        return new self($container, $config);
-    }
-
-    /**
      * Initialize error handling based on environment
      */
     private function initializeErrorHandling(): void
@@ -65,46 +57,12 @@ final class Application
     }
 
     /**
-     * Custom error handler
+     * Create application with default configuration
      */
-    private function createErrorHandler(int $severity, string $message, string $file, int $line): bool
+    public static function create(array $config = []): self
     {
-        if (!(error_reporting() & $severity)) {
-            return false;
-        }
-
-        $errorType = match ($severity) {
-            E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR => 'ERROR',
-            E_WARNING, E_CORE_WARNING, E_COMPILE_WARNING, E_USER_WARNING => 'WARNING',
-            E_NOTICE, E_USER_NOTICE => 'NOTICE',
-            default => 'UNKNOWN'
-        };
-
-        error_log("[{$errorType}] {$message} in {$file}:{$line}");
-
-        if ($this->debugMode) {
-            echo "<br><b>{$errorType}:</b> {$message} in <b>{$file}</b> on line <b>{$line}</b><br>";
-        }
-
-        return true;
-    }
-
-    /**
-     * Custom exception handler
-     */
-    private function createExceptionHandler(\Throwable $exception): void
-    {
-        error_log("Uncaught exception: " . $exception->getMessage() . " in " . $exception->getFile() . ":" . $exception->getLine());
-
-        if ($this->debugMode) {
-            echo "<h1>Uncaught Exception</h1>";
-            echo "<p><strong>Message:</strong> " . htmlspecialchars($exception->getMessage()) . "</p>";
-            echo "<p><strong>File:</strong> " . htmlspecialchars($exception->getFile()) . ":" . $exception->getLine() . "</p>";
-            echo "<pre>" . htmlspecialchars($exception->getTraceAsString()) . "</pre>";
-        } else {
-            http_response_code(500);
-            echo "Internal Server Error";
-        }
+        $container = new Container($config);
+        return new self($container, $config);
     }
 
     /**
@@ -150,7 +108,7 @@ final class Application
             // Send response
             $response->send();
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->handleFatalError($e);
         } finally {
             $this->terminate();
@@ -160,7 +118,7 @@ final class Application
     /**
      * Handle fatal application errors
      */
-    private function handleFatalError(\Throwable $e): void
+    private function handleFatalError(Throwable $e): void
     {
         error_log("Fatal application error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
 
@@ -226,5 +184,48 @@ final class Application
         }
 
         return $value;
+    }
+
+    /**
+     * Custom error handler
+     */
+    private function createErrorHandler(int $severity, string $message, string $file, int $line): bool
+    {
+        if (!(error_reporting() & $severity)) {
+            return false;
+        }
+
+        $errorType = match ($severity) {
+            E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR => 'ERROR',
+            E_WARNING, E_CORE_WARNING, E_COMPILE_WARNING, E_USER_WARNING => 'WARNING',
+            E_NOTICE, E_USER_NOTICE => 'NOTICE',
+            default => 'UNKNOWN'
+        };
+
+        error_log("[{$errorType}] {$message} in {$file}:{$line}");
+
+        if ($this->debugMode) {
+            echo "<br><b>{$errorType}:</b> {$message} in <b>{$file}</b> on line <b>{$line}</b><br>";
+        }
+
+        return true;
+    }
+
+    /**
+     * Custom exception handler
+     */
+    private function createExceptionHandler(Throwable $exception): void
+    {
+        error_log("Uncaught exception: " . $exception->getMessage() . " in " . $exception->getFile() . ":" . $exception->getLine());
+
+        if ($this->debugMode) {
+            echo "<h1>Uncaught Exception</h1>";
+            echo "<p><strong>Message:</strong> " . htmlspecialchars($exception->getMessage()) . "</p>";
+            echo "<p><strong>File:</strong> " . htmlspecialchars($exception->getFile()) . ":" . $exception->getLine() . "</p>";
+            echo "<pre>" . htmlspecialchars($exception->getTraceAsString()) . "</pre>";
+        } else {
+            http_response_code(500);
+            echo "Internal Server Error";
+        }
     }
 }

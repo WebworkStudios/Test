@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Framework\Container\Attributes;
 
 use Attribute;
+use InvalidArgumentException;
+use ReflectionMethod;
+use ReflectionNamedType;
 
 /**
  * Mark a method as a factory for creating services mit PHP 8.4 Features
@@ -97,13 +100,13 @@ final  class Factory
     {
         match (true) {
             empty($this->creates) =>
-            throw new \InvalidArgumentException('Factory creates cannot be empty'),
+            throw new InvalidArgumentException('Factory creates cannot be empty'),
             strlen($this->creates) > 255 =>
-            throw new \InvalidArgumentException('Factory creates name too long'),
+            throw new InvalidArgumentException('Factory creates name too long'),
             str_contains($this->creates, '..') =>
-            throw new \InvalidArgumentException('Factory creates cannot contain ".."'),
+            throw new InvalidArgumentException('Factory creates cannot contain ".."'),
             !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\.]*$/', $this->creates) =>
-            throw new \InvalidArgumentException('Invalid factory creates format'),
+            throw new InvalidArgumentException('Invalid factory creates format'),
             default => null
         };
     }
@@ -115,7 +118,7 @@ final  class Factory
     {
         match ($this->scope) {
             'singleton', 'transient', 'request', 'session' => null,
-            default => throw new \InvalidArgumentException("Invalid scope: {$this->scope}")
+            default => throw new InvalidArgumentException("Invalid scope: {$this->scope}")
         };
     }
 
@@ -125,19 +128,19 @@ final  class Factory
     private function validateTags(): void
     {
         if (count($this->tags) > 10) {
-            throw new \InvalidArgumentException('Too many tags (max 10)');
+            throw new InvalidArgumentException('Too many tags (max 10)');
         }
 
         foreach ($this->tags as $tag) {
             match (true) {
                 !is_string($tag) =>
-                throw new \InvalidArgumentException('Tags must be strings'),
+                throw new InvalidArgumentException('Tags must be strings'),
                 empty($tag) =>
-                throw new \InvalidArgumentException('Tag cannot be empty'),
+                throw new InvalidArgumentException('Tag cannot be empty'),
                 strlen($tag) > 100 =>
-                throw new \InvalidArgumentException('Tag too long (max 100 characters)'),
+                throw new InvalidArgumentException('Tag too long (max 100 characters)'),
                 !preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $tag) =>
-                throw new \InvalidArgumentException("Invalid tag format: {$tag}"),
+                throw new InvalidArgumentException("Invalid tag format: {$tag}"),
                 default => null
             };
         }
@@ -150,9 +153,9 @@ final  class Factory
     {
         match (true) {
             $this->priority < 0 =>
-            throw new \InvalidArgumentException('Priority cannot be negative'),
+            throw new InvalidArgumentException('Priority cannot be negative'),
             $this->priority > 1000 =>
-            throw new \InvalidArgumentException('Priority too high (max 1000)'),
+            throw new InvalidArgumentException('Priority too high (max 1000)'),
             default => null
         };
     }
@@ -163,19 +166,19 @@ final  class Factory
     private function validateParameters(): void
     {
         if (count($this->parameters) > 20) {
-            throw new \InvalidArgumentException('Too many parameters (max 20)');
+            throw new InvalidArgumentException('Too many parameters (max 20)');
         }
 
         foreach ($this->parameters as $name => $value) {
             match (true) {
                 !is_string($name) =>
-                throw new \InvalidArgumentException('Parameter names must be strings'),
+                throw new InvalidArgumentException('Parameter names must be strings'),
                 empty($name) =>
-                throw new \InvalidArgumentException('Parameter name cannot be empty'),
+                throw new InvalidArgumentException('Parameter name cannot be empty'),
                 strlen($name) > 100 =>
-                throw new \InvalidArgumentException('Parameter name too long'),
+                throw new InvalidArgumentException('Parameter name too long'),
                 !preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name) =>
-                throw new \InvalidArgumentException("Invalid parameter name: {$name}"),
+                throw new InvalidArgumentException("Invalid parameter name: {$name}"),
                 default => null
             };
         }
@@ -245,7 +248,7 @@ final  class Factory
     /**
      * Validate that method signature is correct for factory
      */
-    public function validateMethod(\ReflectionMethod $method): bool
+    public function validateMethod(ReflectionMethod $method): bool
     {
         // Factory methods müssen static und public sein
         if (!$method->isStatic() || !$method->isPublic()) {
@@ -272,7 +275,7 @@ final  class Factory
         $firstParam = $method->getParameters()[0];
         $firstParamType = $firstParam->getType();
 
-        if ($firstParamType instanceof \ReflectionNamedType) {
+        if ($firstParamType instanceof ReflectionNamedType) {
             $typeName = $firstParamType->getName();
             $validTypes = ['Framework\\Container\\Container', 'Framework\\Container\\ContainerInterface'];
 
@@ -409,31 +412,31 @@ final  class Factory
 
         try {
             $this->validateCreates();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateScope();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateTags();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validatePriority();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
         try {
             $this->validateParameters();
-        } catch (\InvalidArgumentException $e) {
+        } catch (InvalidArgumentException $e) {
             $errors[] = $e->getMessage();
         }
 
@@ -466,7 +469,7 @@ final  class Factory
         try {
             $this->validateConstruction();
             return true;
-        } catch (\InvalidArgumentException) {
+        } catch (InvalidArgumentException) {
             return false;
         }
     }

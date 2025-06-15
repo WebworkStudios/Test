@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Actions;
 
-use Framework\Routing\Attributes\Route;
-use Framework\Http\{Request, Response};
 use Framework\Container\Container;
+use Framework\Http\{Request, Response};
+use Framework\Routing\Attributes\Route;
 
 /**
  * Home page action with comprehensive system status
@@ -17,7 +17,9 @@ final class HomeAction
 {
     public function __construct(
         private readonly Container $container
-    ) {}
+    )
+    {
+    }
 
     public function __invoke(Request $request, array $params): Response
     {

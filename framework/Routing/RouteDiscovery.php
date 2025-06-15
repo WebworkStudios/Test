@@ -4,11 +4,18 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
+use Exception;
 use Framework\Routing\Attributes\Route;
+use InvalidArgumentException;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
+use RecursiveIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
+use ReflectionException;
+use RuntimeException;
+use SplFileInfo;
+use Throwable;
 
 /**
  * Optimized route discovery with PHP 8.4 features
@@ -53,13 +60,13 @@ final class RouteDiscovery
     private function validateConfiguration(): void
     {
         if ($this->maxDepth < 1 || $this->maxDepth > 20) {
-            throw new \InvalidArgumentException('Invalid max depth: must be between 1 and 20');
+            throw new InvalidArgumentException('Invalid max depth: must be between 1 and 20');
         }
 
         // ✅ Validierung lockern für leere Arrays
         foreach ($this->ignoredDirectories as $dir) {
             if (!is_string($dir) || strlen($dir) > 100) {
-                throw new \InvalidArgumentException('Invalid ignored directory specification');
+                throw new InvalidArgumentException('Invalid ignored directory specification');
             }
         }
     }
@@ -85,7 +92,7 @@ final class RouteDiscovery
         try {
             $reflection = new ReflectionClass($className);
             return !empty($reflection->getAttributes(Route::class));
-        } catch (\ReflectionException) {
+        } catch (ReflectionException) {
             return false;
         }
     }
@@ -145,7 +152,7 @@ final class RouteDiscovery
         $existingPaths = array_filter($defaultPaths, 'is_dir');
 
         if (empty($existingPaths)) {
-            throw new \RuntimeException('No default discovery paths found');
+            throw new RuntimeException('No default discovery paths found');
         }
 
         $this->discover($existingPaths);
@@ -170,24 +177,24 @@ final class RouteDiscovery
     private function validateDirectories(array $directories): void
     {
         if (empty($directories)) {
-            throw new \InvalidArgumentException('At least one directory must be specified');
+            throw new InvalidArgumentException('At least one directory must be specified');
         }
 
         if (count($directories) > 20) {
-            throw new \InvalidArgumentException('Too many directories to scan (max 20)');
+            throw new InvalidArgumentException('Too many directories to scan (max 20)');
         }
 
         foreach ($directories as $directory) {
             if (!is_string($directory)) {
-                throw new \InvalidArgumentException('Directory must be a string');
+                throw new InvalidArgumentException('Directory must be a string');
             }
 
             if (strlen($directory) > 500) {
-                throw new \InvalidArgumentException('Directory path too long');
+                throw new InvalidArgumentException('Directory path too long');
             }
 
             if (str_contains($directory, "\0") || (!str_contains($directory, '*') && str_contains($directory, '..'))) {
-                throw new \InvalidArgumentException('Directory path contains invalid characters');
+                throw new InvalidArgumentException('Directory path contains invalid characters');
             }
         }
     }
@@ -204,7 +211,7 @@ final class RouteDiscovery
 
         if (!is_dir($directory)) {
             if ($this->strictMode) {
-                throw new \InvalidArgumentException("Directory does not exist: {$directory}");
+                throw new InvalidArgumentException("Directory does not exist: {$directory}");
             }
             return;
         }
@@ -212,14 +219,14 @@ final class RouteDiscovery
         $realDirectory = realpath($directory);
         if ($realDirectory === false || !$this->isSecurePath($realDirectory)) {
             if ($this->strictMode) {
-                throw new \InvalidArgumentException("Invalid or insecure directory: {$directory}");
+                throw new InvalidArgumentException("Invalid or insecure directory: {$directory}");
             }
             return;
         }
 
         try {
             $this->scanWithIterator($realDirectory);
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             if ($this->strictMode) {
                 throw $e;
             }
@@ -339,7 +346,7 @@ final class RouteDiscovery
             $this->processRouteAttributes($reflection);
             $this->classCache[$className] = true;
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->classCache[$className] = false;
 
             if ($this->strictMode) {
@@ -380,7 +387,7 @@ final class RouteDiscovery
 
                 $this->discoveredRoutes++;
 
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 if ($this->strictMode) {
                     throw $e;
                 }
@@ -410,14 +417,14 @@ final class RouteDiscovery
     public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
     {
         if (!is_dir($baseDir)) {
-            throw new \InvalidArgumentException("Base directory does not exist: {$baseDir}");
+            throw new InvalidArgumentException("Base directory does not exist: {$baseDir}");
         }
 
         $fullPattern = rtrim($baseDir, '/') . '/' . ltrim($pattern, '/');
         $files = glob($fullPattern, GLOB_BRACE);
 
         if ($files === false) {
-            throw new \RuntimeException("Failed to execute glob pattern: {$fullPattern}");
+            throw new RuntimeException("Failed to execute glob pattern: {$fullPattern}");
         }
 
         $this->discoverInFiles($files);
@@ -440,24 +447,24 @@ final class RouteDiscovery
     private function validateFilePaths(array $filePaths): void
     {
         if (empty($filePaths)) {
-            throw new \InvalidArgumentException('At least one file path must be specified');
+            throw new InvalidArgumentException('At least one file path must be specified');
         }
 
         if (count($filePaths) > 100) {
-            throw new \InvalidArgumentException('Too many files to scan (max 100)');
+            throw new InvalidArgumentException('Too many files to scan (max 100)');
         }
 
         foreach ($filePaths as $filePath) {
             if (!is_string($filePath)) {
-                throw new \InvalidArgumentException('File path must be a string');
+                throw new InvalidArgumentException('File path must be a string');
             }
 
             if (strlen($filePath) > 500) {
-                throw new \InvalidArgumentException('File path too long');
+                throw new InvalidArgumentException('File path too long');
             }
 
             if (str_contains($filePath, "\0") || str_contains($filePath, '..')) {
-                throw new \InvalidArgumentException('File path contains invalid characters');
+                throw new InvalidArgumentException('File path contains invalid characters');
             }
         }
     }
@@ -516,7 +523,7 @@ final class RouteDiscovery
     /**
      * Create file filter for iterator
      */
-    private function createFileFilter(\SplFileInfo $file, string $key, \RecursiveIterator $iterator): bool
+    private function createFileFilter(SplFileInfo $file, string $key, RecursiveIterator $iterator): bool
     {
         $filename = $file->getFilename();
 
@@ -537,6 +544,7 @@ final class RouteDiscovery
             $file->getSize() > 0 &&
             $file->getSize() <= 2097152; // 2MB limit
     }
+
     /**
      * Check if directory is allowed
      */

@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
+use DateTimeImmutable;
+use DateTimeInterface;
 use framework\Http\Cache\CacheHeaders;
 use framework\Http\Cache\Cookie;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * HTTP Response representation with PHP 8.4 enhancements
@@ -224,7 +227,7 @@ final class Response
     public static function cached(
         string             $content,
         string             $etag,
-        \DateTimeImmutable $lastModified,
+        DateTimeImmutable $lastModified,
         int                $maxAge = 3600,
         bool               $public = true,
         string             $contentType = 'text/html; charset=utf-8'
@@ -321,7 +324,7 @@ final class Response
     /**
      * Set Last-Modified header
      */
-    public function withLastModified(\DateTimeInterface $lastModified): self
+    public function withLastModified(DateTimeInterface $lastModified): self
     {
         return $this->withHeader('Last-Modified', $lastModified->format('D, d M Y H:i:s T'));
     }
@@ -329,7 +332,7 @@ final class Response
     /**
      * Set Expires header
      */
-    public function withExpires(\DateTimeInterface $expires): self
+    public function withExpires(DateTimeInterface $expires): self
     {
         return $this->withHeader('Expires', $expires->format('D, d M Y H:i:s T'));
     }
@@ -406,7 +409,7 @@ final class Response
     {
         // Prevent output before headers
         if (headers_sent()) {
-            throw new \RuntimeException('Headers already sent');
+            throw new RuntimeException('Headers already sent');
         }
 
         // Set status code

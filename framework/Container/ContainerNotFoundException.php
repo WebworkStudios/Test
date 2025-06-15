@@ -44,25 +44,6 @@ final class ContainerNotFoundException extends ContainerException implements Not
     }
 
     /**
-     * Create exception for missing tagged services
-     */
-    public static function tagNotFound(string $tag, array $availableTags = []): self
-    {
-        $safeTag = preg_replace('/[^\w.]/', '', $tag);
-
-        $exception = new self(
-            "No services found with tag '{$safeTag}'",
-            2002,
-            null,
-            ['available_tags' => array_slice($availableTags, 0, 10)]
-        );
-
-        $exception->suggestions = $exception->findSimilarServices($safeTag, $availableTags);
-
-        return $exception;
-    }
-
-    /**
      * Findet ähnliche Services basierend auf String-Ähnlichkeit
      */
     private function findSimilarServices(string $needle, array $haystack): array
@@ -123,6 +104,25 @@ final class ContainerNotFoundException extends ContainerException implements Not
         $similarity = 0;
         similar_text($needle, $service, $similarity);
         return $similarity / 100;
+    }
+
+    /**
+     * Create exception for missing tagged services
+     */
+    public static function tagNotFound(string $tag, array $availableTags = []): self
+    {
+        $safeTag = preg_replace('/[^\w.]/', '', $tag);
+
+        $exception = new self(
+            "No services found with tag '{$safeTag}'",
+            2002,
+            null,
+            ['available_tags' => array_slice($availableTags, 0, 10)]
+        );
+
+        $exception->suggestions = $exception->findSimilarServices($safeTag, $availableTags);
+
+        return $exception;
     }
 
     public function getSuggestions(): array

@@ -909,7 +909,9 @@ if (!$debugMode) {
 #### Methods
 
 -
+
 `addRoute(string $method, string $path, string $actionClass, array $middleware = [], ?string $name = null, ?string $subdomain = null): void`
+
 - `dispatch(Request $request): Response`
 - `url(string $name, array $params = [], ?string $subdomain = null): string`
 - `hasRoute(string $method, string $path, ?string $subdomain = null): bool`

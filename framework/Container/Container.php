@@ -5,7 +5,14 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 use Framework\Container\Attributes\{Config, Inject};
-use Framework\Container\ContainerNotFoundException;
+use ReflectionAttribute;
+use ReflectionClass;
+use ReflectionException;
+use ReflectionMethod;
+use ReflectionNamedType;
+use ReflectionParameter;
+use stdClass;
+use WeakMap;
 
 /**
  * High-Performance Framework Container für PHP 8.4
@@ -40,7 +47,7 @@ final class Container implements ContainerInterface
         'building' => [],     // Circular dependency tracking
         'contextual' => [],   // Contextual bindings
     ];
-    private \WeakMap $reflectionCache;
+    private WeakMap $reflectionCache;
 
     // Security & Config
     private bool $compiled = false;
@@ -52,7 +59,7 @@ final class Container implements ContainerInterface
     )
     {
         $this->config = $config;
-        $this->reflectionCache = new \WeakMap();
+        $this->reflectionCache = new WeakMap();
         $this->securityValidator = new SecurityValidator(
             strictMode: true,
             allowedPaths: $allowedPaths ?: [getcwd()]
@@ -193,7 +200,7 @@ final class Container implements ContainerInterface
             'contextual' => []
         ];
 
-        $this->reflectionCache = new \WeakMap();
+        $this->reflectionCache = new WeakMap();
         $this->compiled = false;
 
         // Self-registration
@@ -336,7 +343,7 @@ final class Container implements ContainerInterface
     /**
      * Cached Reflection mit WeakMap
      */
-    private function getCachedReflection(string $className): \ReflectionClass
+    private function getCachedReflection(string $className): ReflectionClass
     {
         // Suche in WeakMap Cache
         foreach ($this->reflectionCache as $class => $reflection) {
@@ -346,10 +353,10 @@ final class Container implements ContainerInterface
         }
 
         try {
-            $reflection = new \ReflectionClass($className);
+            $reflection = new ReflectionClass($className);
             $this->reflectionCache[$reflection] = $reflection;
             return $reflection;
-        } catch (\ReflectionException $e) {
+        } catch (ReflectionException $e) {
             throw ContainerException::cannotResolve($className, 'Class does not exist');
         }
     }
@@ -357,7 +364,7 @@ final class Container implements ContainerInterface
     /**
      * Parameter-Auflösung mit Attribut-Support
      */
-    private function resolveParameters(\ReflectionMethod $constructor, string $context): array
+    private function resolveParameters(ReflectionMethod $constructor, string $context): array
     {
         $parameters = [];
 
@@ -371,7 +378,7 @@ final class Container implements ContainerInterface
     /**
      * Einzelner Parameter mit Attribut-Unterstützung
      */
-    private function resolveParameter(\ReflectionParameter $parameter, string $context): mixed
+    private function resolveParameter(ReflectionParameter $parameter, string $context): mixed
     {
         // Prüfe Inject Attribut
         $injectAttrs = $parameter->getAttributes(Inject::class);
@@ -387,7 +394,7 @@ final class Container implements ContainerInterface
 
         // Type-based resolution
         $type = $parameter->getType();
-        if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+        if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
             $typeName = $type->getName();
 
             // Prüfe contextual binding zuerst
@@ -415,8 +422,8 @@ final class Container implements ContainerInterface
      * Resolve Inject Attribut
      */
     private function resolveInjectAttribute(
-        \ReflectionAttribute $attr,
-        \ReflectionParameter $parameter
+        ReflectionAttribute $attr,
+        ReflectionParameter $parameter
     ): mixed
     {
         $inject = $attr->newInstance();
@@ -475,8 +482,8 @@ final class Container implements ContainerInterface
      * Resolve Config Attribut
      */
     private function resolveConfigAttribute(
-        \ReflectionAttribute $attr,
-        \ReflectionParameter $parameter
+        ReflectionAttribute $attr,
+        ReflectionParameter $parameter
     ): mixed
     {
         $config = $attr->newInstance();
@@ -543,7 +550,7 @@ final class Container implements ContainerInterface
         }
 
         // PHP 8.4 native lazy object für unbekannte Zielklasse
-        return (new \ReflectionClass(\stdClass::class))->newLazyProxy($initializer);
+        return (new ReflectionClass(stdClass::class))->newLazyProxy($initializer);
     }
 
     /**
@@ -633,6 +640,6 @@ final class Container implements ContainerInterface
     public function __destruct()
     {
         // Cleanup für WeakMaps und Referenzen
-        $this->reflectionCache = new \WeakMap();
+        $this->reflectionCache = new WeakMap();
     }
 }

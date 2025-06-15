@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace App\Actions;
 
-use Framework\Routing\Attributes\Route;
+use InvalidArgumentException;
 use Framework\Http\{Request, Response};
+use Framework\Routing\Attributes\Route;
 
 /**
  * Test Action für verschiedene Parameter-Typen
@@ -170,6 +171,38 @@ final class UserAction
         ');
     }
 
+    /**
+     * ✅ Manuelle Parameter-Validierung
+     */
+    private function validateParameters(Request $request, array $params): void
+    {
+        $path = $request->path;
+
+        // UUID Validierung für API-Routen
+        if (str_contains($path, '/api/user/') && isset($params['uuid'])) {
+            if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $params['uuid'])) {
+                throw new InvalidArgumentException('Invalid UUID format');
+            }
+        }
+
+        // Integer-Validierung für Jahr/Monat
+        if (str_contains($path, '/blog/')) {
+            if (isset($params['year']) && (!is_numeric($params['year']) || (int)$params['year'] < 2000 || (int)$params['year'] > 2030)) {
+                throw new InvalidArgumentException('Invalid year format');
+            }
+            if (isset($params['month']) && (!is_numeric($params['month']) || (int)$params['month'] < 1 || (int)$params['month'] > 12)) {
+                throw new InvalidArgumentException('Invalid month format');
+            }
+        }
+
+        // Slug-Validierung
+        if (isset($params['slug']) && !preg_match('/^[a-z0-9-]+$/', $params['slug'])) {
+            throw new InvalidArgumentException('Invalid slug format');
+        }
+
+        // User ID kann String oder Integer sein - keine Validierung nötig
+    }
+
     private function determineRoute(Request $request, array $params): array
     {
         $path = $request->path;
@@ -216,37 +249,5 @@ final class UserAction
         }
 
         return $html;
-    }
-
-    /**
-     * ✅ Manuelle Parameter-Validierung
-     */
-    private function validateParameters(Request $request, array $params): void
-    {
-        $path = $request->path;
-
-        // UUID Validierung für API-Routen
-        if (str_contains($path, '/api/user/') && isset($params['uuid'])) {
-            if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $params['uuid'])) {
-                throw new \InvalidArgumentException('Invalid UUID format');
-            }
-        }
-
-        // Integer-Validierung für Jahr/Monat
-        if (str_contains($path, '/blog/')) {
-            if (isset($params['year']) && (!is_numeric($params['year']) || (int)$params['year'] < 2000 || (int)$params['year'] > 2030)) {
-                throw new \InvalidArgumentException('Invalid year format');
-            }
-            if (isset($params['month']) && (!is_numeric($params['month']) || (int)$params['month'] < 1 || (int)$params['month'] > 12)) {
-                throw new \InvalidArgumentException('Invalid month format');
-            }
-        }
-
-        // Slug-Validierung
-        if (isset($params['slug']) && !preg_match('/^[a-z0-9-]+$/', $params['slug'])) {
-            throw new \InvalidArgumentException('Invalid slug format');
-        }
-
-        // User ID kann String oder Integer sein - keine Validierung nötig
     }
 }

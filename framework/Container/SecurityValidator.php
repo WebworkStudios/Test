@@ -5,6 +5,9 @@ declare(strict_types=1);
 
 namespace Framework\Container;
 
+use ReflectionClass;
+use ReflectionMethod;
+
 /**
  * Security Validator für Container-Operationen mit PHP 8.4 Features
  *
@@ -104,7 +107,7 @@ final readonly class SecurityValidator
     /**
      * Validiert PHP-Klassen auf Sicherheitsrisiken
      */
-    public function isClassSecure(\ReflectionClass $reflection): bool
+    public function isClassSecure(ReflectionClass $reflection): bool
     {
         return match (true) {
             $reflection->isInternal() => false,
@@ -118,7 +121,7 @@ final readonly class SecurityValidator
     /**
      * ✅ Neue Methode: Prüft ob es eine Action-Klasse ist
      */
-    private function isActionClass(\ReflectionClass $reflection): bool
+    private function isActionClass(ReflectionClass $reflection): bool
     {
         $className = $reflection->getName();
 
@@ -143,7 +146,7 @@ final readonly class SecurityValidator
     /**
      * Prüft Klasse auf Sicherheitsrisiken
      */
-    private function hasSecurityRisks(\ReflectionClass $reflection): bool
+    private function hasSecurityRisks(ReflectionClass $reflection): bool
     {
         // Prüfe gefährliche Interfaces
         foreach (self::DANGEROUS_INTERFACES as $dangerousInterface) {
@@ -153,7 +156,7 @@ final readonly class SecurityValidator
         }
 
         // Prüfe gefährliche Methoden
-        $methods = $reflection->getMethods(\ReflectionMethod::IS_PUBLIC);
+        $methods = $reflection->getMethods(ReflectionMethod::IS_PUBLIC);
         foreach ($methods as $method) {
             if (in_array(strtolower($method->getName()), self::DANGEROUS_METHODS, true)) {
                 return true;
@@ -166,7 +169,7 @@ final readonly class SecurityValidator
     /**
      * Prüft ob Klassendatei sicher ist
      */
-    private function isClassFileSecure(\ReflectionClass $reflection): bool
+    private function isClassFileSecure(ReflectionClass $reflection): bool
     {
         $fileName = $reflection->getFileName();
 
@@ -268,7 +271,7 @@ final readonly class SecurityValidator
     /**
      * Validiert Methodennamen auf Sicherheit
      */
-    public function isMethodSafe(\ReflectionMethod $method): bool
+    public function isMethodSafe(ReflectionMethod $method): bool
     {
         $methodName = strtolower($method->getName());
 
@@ -284,7 +287,7 @@ final readonly class SecurityValidator
     /**
      * Validiert Instance-Methoden (für Factory-Pattern etc.)
      */
-    private function validateInstanceMethod(\ReflectionMethod $method): bool
+    private function validateInstanceMethod(ReflectionMethod $method): bool
     {
         // Im strict mode nur bestimmte Instance-Methoden erlauben
         $allowedInstanceMethods = ['__invoke', 'handle', 'execute', 'process'];
