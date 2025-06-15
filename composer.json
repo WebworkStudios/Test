@@ -1,0 +1,41 @@
+{
+  "name": "framework/php84-framework",
+  "description": "Modern PHP 8.4 Framework with Property Hooks and advanced features",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.4.0",
+    "ext-json": "*",
+    "ext-mbstring": "*"
+  },
+  "suggest": {
+    "ext-zlib": "For route cache compression",
+    "ext-opcache": "For better performance"
+  },
+  "autoload": {
+    "psr-4": {
+      "Framework\\": "framework/",
+      "App\\": "app/"
+    }
+  },
+  "config": {
+    "optimize-autoloader": true,
+    "preferred-install": "dist",
+    "sort-packages": true,
+    "allow-plugins": {
+      "php-http/discovery": true
+    }
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true,
+  "scripts": {
+    "post-autoload-dump": [
+      "@php -r \"file_exists('storage') || mkdir('storage', 0755, true);\"",
+      "@php -r \"file_exists('storage/cache') || mkdir('storage/cache', 0755, true);\"",
+      "@php -r \"file_exists('storage/cache/routes') || mkdir('storage/cache/routes', 0755, true);\"",
+      "@php -r \"file_exists('storage/sessions') || mkdir('storage/sessions', 0755, true);\"",
+      "@php -r \"file_exists('storage/logs') || mkdir('storage/logs', 0755, true);\""
+    ],
+    "serve": "php -S localhost:8000 -t public"
+  }
+}
