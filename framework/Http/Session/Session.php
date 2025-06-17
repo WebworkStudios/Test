@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace framework\Http\Session;
 
+use Framework\Http\Session\SessionSecurity;
 use InvalidArgumentException;
 use RuntimeException;
 
