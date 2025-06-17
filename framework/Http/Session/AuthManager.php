@@ -15,6 +15,10 @@ final class AuthManager implements AuthInterface
     {
     }
 
+
+    /**
+     * Vereinfachte Login-Logik
+     */
     public function login(string|int $userId, array $userData = []): void
     {
         $this->session->regenerate();
@@ -27,6 +31,9 @@ final class AuthManager implements AuthInterface
         ];
     }
 
+    /**
+     * Vereinfachte Logout-Logik
+     */
     public function logout(): void
     {
         unset($_SESSION[self::USER_KEY]);
@@ -43,6 +50,9 @@ final class AuthManager implements AuthInterface
         return $_SESSION[self::USER_KEY]['data'] ?? [];
     }
 
+    /**
+     * Vereinfachte Touch-Methode
+     */
     public function touch(): void
     {
         if ($this->check()) {

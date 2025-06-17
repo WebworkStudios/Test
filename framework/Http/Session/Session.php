@@ -29,11 +29,14 @@ class Session implements SessionInterface
     private ?FlashManager $flashManager = null;
     private ?AuthManager $authManager = null;
 
+    private readonly SessionSecurity $security;
+
     public function __construct(
         private readonly array $config = []
     )
     {
         $this->configure();
+        $this->security = new SessionSecurity($this->config);
     }
 
     /**
@@ -92,63 +95,51 @@ class Session implements SessionInterface
         $this->started = true;
         $this->sessionId = session_id();
 
-        // Security validation
-        $this->validateSession();
-        $this->regenerateIfNeeded();
+        // Delegiere Security-Validierung
+        try {
+            $this->security->validateSession();
+            $this->regenerateIfNeeded();
+        } catch (RuntimeException $e) {
+            $this->destroy();
+            throw $e;
+        }
     }
 
     /**
-     * Validate session security
+     * Regenerate session ID periodically
      */
-    private function validateSession(): void
+    private function regenerateIfNeeded(): void
     {
-        $now = time();
-
-        // ✅ FIX: Neue Session erkennen und initialisieren
-        if (!isset($_SESSION[self::SESSION_PREFIX . 'last_activity'])) {
-            // Neue Session - initialisiere mit aktueller Zeit
-            $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
-            $_SESSION[self::SESSION_PREFIX . 'created_at'] = $now;
-            return; // Keine weitere Validierung bei neuer Session
-        }
-
-        $lastActivity = $_SESSION[self::SESSION_PREFIX . 'last_activity'];
-
-        // ✅ FIX: Prüfe nur bei bestehenden Sessions auf Expiry
-        if ($now - $lastActivity > self::MAX_LIFETIME) {
-            $this->destroyWithException('Session expired');
-        }
-
-        // Update last activity
-        $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
-
-        // ✅ FIX: Fingerprint nur bei bestehenden Sessions validieren
-        if (!isset($_SESSION[self::SESSION_PREFIX . 'fingerprint'])) {
-            $_SESSION[self::SESSION_PREFIX . 'fingerprint'] = hash('sha256',
-                ($_SERVER['HTTP_USER_AGENT'] ?? '') .
-                ($_SERVER['REMOTE_ADDR'] ?? '') .
-                session_id()
-            );
-        } else {
-            // Nur validieren wenn Fingerprint bereits existiert
-            $this->validateFingerprint();
-            // IP-Validierung nur in Production aktivieren
-            if (($this->config['validate_ip'] ?? false) === true) {
-                $this->validateIpAddress();
-            }
+        if ($this->security->needsRegeneration()) {
+            $this->regenerate();
         }
     }
-
-// ✅ IP-Validierung aktivieren
 
     /**
-     * Destroy session and throw exception
+     * Regenerate session ID (prevents session fixation)
      */
-    private function destroyWithException(string $message): never
+    public function regenerate(bool $deleteOld = true): void
     {
-        $this->destroy();
-        throw new RuntimeException($message);
+        $this->ensureStarted();
+
+        if (!session_regenerate_id($deleteOld)) {
+            throw new RuntimeException('Failed to regenerate session ID');
+        }
+
+        $this->sessionId = session_id();
+        $this->security->markRegenerated();
     }
+
+    /**
+     * Ensure session is started
+     */
+    private function ensureStarted(): void
+    {
+        if (!$this->started) {
+            $this->start();
+        }
+    }
+    // === Private Helper Methods ===
 
     /**
      * Destroy session completely
@@ -163,6 +154,9 @@ class Session implements SessionInterface
         $this->sessionData = [];
         $this->flashManager = null;
         $this->authManager = null;
+
+        // Security cleanup
+        $this->security->cleanup();
 
         // Clear PHP session
         $_SESSION = [];
@@ -184,91 +178,6 @@ class Session implements SessionInterface
         session_destroy();
         $this->started = false;
         $this->sessionId = null;
-    }
-
-    /**
-     * Validate user agent fingerprint
-     */
-    private function validateFingerprint(): void
-    {
-        $currentUserAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-        $sessionUserAgent = $_SESSION[self::SESSION_PREFIX . 'user_agent'] ?? '';
-
-        if ($sessionUserAgent === '') {
-            // Setze User-Agent wenn noch nicht gesetzt
-            $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent;
-            return;
-        }
-
-        // ✅ FIX: Weniger strenge Validierung - nur bei komplett anderem User-Agent
-        if ($sessionUserAgent !== $currentUserAgent && strlen($sessionUserAgent) > 0) {
-            // Nur destroyen wenn User-Agent sich komplett geändert hat
-            if (levenshtein($sessionUserAgent, $currentUserAgent) > 50) {
-                $this->destroyWithException('Session hijacking detected');
-            }
-        }
-    }
-
-    private function validateIpAddress(): void
-    {
-        $currentIp = $_SERVER['REMOTE_ADDR'] ?? '';
-        $sessionIp = $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? '';
-
-        if ($sessionIp === '') {
-            $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
-            return;
-        }
-
-        // ✅ Weniger streng: Erlaube IP-Wechsel in Development
-        if ($sessionIp !== $currentIp) {
-            $environment = $this->config['environment'] ?? 'development';
-
-            if ($environment === 'production') {
-                $this->destroyWithException('IP address mismatch');
-            } else {
-                // In Development: Update IP statt destroy
-                $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
-            }
-        }
-    }
-
-    /**
-     * Regenerate session ID periodically
-     */
-    private function regenerateIfNeeded(): void
-    {
-        $lastRegeneration = $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] ?? 0;
-
-        if (time() - $lastRegeneration > self::REGENERATE_INTERVAL) {
-            $this->regenerate();
-        }
-    }
-
-    /**
-     * Regenerate session ID (prevents session fixation)
-     */
-    public function regenerate(bool $deleteOld = true): void
-    {
-        $this->ensureStarted();
-
-        if (!session_regenerate_id($deleteOld)) {
-            throw new RuntimeException('Failed to regenerate session ID');
-        }
-
-        $this->sessionId = session_id();
-        $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] = time();
-    }
-
-    // === Private Helper Methods ===
-
-    /**
-     * Ensure session is started
-     */
-    private function ensureStarted(): void
-    {
-        if (!$this->started) {
-            $this->start();
-        }
     }
 
     /**
