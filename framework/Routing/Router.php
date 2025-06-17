@@ -296,15 +296,25 @@ final class Router
             $path = $this->sanitizePath($request->path);
             $subdomain = $this->extractSubdomain($request->host());
 
-            // Debug nur bei spezifischen Problemen
-            if ($this->debugMode && ($path === '/user/123' || str_contains($path, 'E:'))) {
-                error_log("=== ROUTER DEBUG ===");
-                error_log("Raw URI: {$request->uri}");
-                error_log("Raw path: {$request->path}");
-                error_log("Sanitized path: {$path}");
-                error_log("Method: {$method}");
-                error_log("Host: {$request->host()}");
+            // ✅ ERWEITERTE DEBUG-AUSGABE NUR FÜR PROBLEMATISCHE PFADE
+            if (str_contains($path, '123')) {
+                error_log("=== ROUTER DEBUG FOR 123 ===");
+                error_log("Original URI: " . $request->uri);
+                error_log("Original path: " . $request->path);
+                error_log("Sanitized path: " . $path);
+                error_log("Method: " . $method);
+                error_log("Host: " . $request->host());
                 error_log("Subdomain: " . ($subdomain ?? 'none'));
+
+                // Debug verfügbare Routen
+                if (isset($this->routes[$method])) {
+                    error_log("Available routes for {$method}: " . count($this->routes[$method]));
+                    foreach ($this->routes[$method] as $i => $route) {
+                        error_log("Route {$i}: {$route->originalPath} -> {$route->actionClass}");
+                    }
+                } else {
+                    error_log("NO ROUTES for method: {$method}");
+                }
             }
 
             // Check cache first
@@ -325,10 +335,21 @@ final class Router
             $matchResult = $this->findMatchingRoute($method, $path, $subdomain);
 
             if ($matchResult === null) {
+                // ✅ SPEZIELLE DEBUG-AUSGABE FÜR 123
+                if (str_contains($path, '123')) {
+                    error_log("❌ NO MATCH FOUND FOR: {$method} {$path}");
+                    error_log("Available methods: " . implode(', ', array_keys($this->routes)));
+                }
                 $this->handleNoMatch($method, $path, $subdomain);
             }
 
             [$route, $params] = $matchResult;
+
+            // ✅ DEBUG BEI ERFOLGREICHER ROUTE
+            if (str_contains($path, '123')) {
+                error_log("✅ ROUTE MATCHED: {$route->originalPath} -> {$route->actionClass}");
+                error_log("Extracted params: " . json_encode($params));
+            }
 
             // Cache successful match
             $this->cacheMatch($cacheKey, $route, $params);
@@ -359,8 +380,8 @@ final class Router
             throw new InvalidArgumentException("Request contains null bytes");
         }
 
-        // Check for absolute paths (Windows drive letters)
-        if (preg_match('/^[A-Z]:/i', $request->path) || preg_match('/^[A-Z]:/i', $request->uri)) {
+        // ✅ KORRIGIERT: Nur echte Windows-Absolute-Pfade abfangen
+        if (preg_match('/^[A-Z]:[\\\\\/]/', $request->path) || preg_match('/^[A-Z]:[\\\\\/]/', $request->uri)) {
             throw new InvalidArgumentException("Absolute file paths not allowed in URL");
         }
 
@@ -471,40 +492,47 @@ final class Router
     }
 
     /**
-     * Sanitize path with improved Windows path detection
+     * Sanitize path - KOMPLETT ÜBERARBEITET
      */
     private function sanitizePath(string $path): string
     {
-        // Remove dangerous sequences
+        // ✅ DEBUG: Original Path loggen
+        if (str_contains($path, '123')) {
+            error_log("sanitizePath INPUT: '{$path}'");
+        }
+
+        // Entferne gefährliche Sequenzen
         $cleaned = str_replace(['../', '.\\', '..\\', "\0"], '', $path);
 
-        // Handle Windows drive letters (absolute paths) - reject immediately
-        if (preg_match('/^[A-Z]:/i', $cleaned)) {
+        // ✅ KORRIGIERT: Nur Windows-Absolute-Pfade prüfen - MIT NACHFOLGENDEM ZEICHEN
+        if (preg_match('/^[A-Z]:[\\\\\/]/', $cleaned)) {
             throw new InvalidArgumentException('Absolute file paths not allowed in URL');
         }
 
-        // Remove any backslashes (Windows path separators)
+        // Backslashes entfernen
         $cleaned = str_replace('\\', '/', $cleaned);
 
-        // Ensure path starts with /
+        // Sicherstellen dass Pfad mit / beginnt
         if (!str_starts_with($cleaned, '/')) {
             $cleaned = '/' . $cleaned;
         }
 
-        // Remove double slashes
+        // Doppelte Slashes entfernen
         $cleaned = preg_replace('#/+#', '/', $cleaned);
 
-        // Additional validation
+        // Längenvalidierung
         if (strlen($cleaned) > 2048) {
             throw new InvalidArgumentException('Path too long');
+        }
+
+        // ✅ DEBUG: Bereinigten Path loggen
+        if (str_contains($path, '123')) {
+            error_log("sanitizePath OUTPUT: '{$cleaned}'");
         }
 
         return $cleaned;
     }
 
-    /**
-     * Extract subdomain from host
-     */
     /**
      * Extract subdomain from host - korrigierte Version
      */

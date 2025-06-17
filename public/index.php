@@ -91,7 +91,7 @@ try {
 
     if (env('APP_DEBUG', false)) {
         // Debug mode - show detailed error
-        echo "<!DOCTYPE html><html><head><title>Application Error</title></head><body>";
+        echo "<!DOCTYPE html><html lang=de><head><title>Application Error</title></head><body>";
         echo "<h1>🐛 Application Error</h1>";
         echo "<div style='background:#f8f9fa;padding:20px;border-radius:8px;margin:20px 0;'>";
         echo "<strong>Message:</strong> " . htmlspecialchars($e->getMessage()) . "<br>";

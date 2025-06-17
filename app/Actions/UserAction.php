@@ -21,11 +21,19 @@ final class UserAction
 {
     public function __invoke(Request $request, array $params): Response
     {
+        // ✅ DEBUG: Prüfe was hier passiert
+        error_log("=== UserAction INVOKE ===");
+        error_log("Request path: " . $request->path);
+        error_log("Request URI: " . $request->uri);
+        error_log("Params: " . json_encode($params));
         // ✅ Manuelle Parameter-Validierung in der Action
         $this->validateParameters($request, $params);
 
         // Bestimme welche Route getroffen wurde basierend auf den Parametern
         $routeInfo = $this->determineRoute($request, $params);
+
+
+        error_log("Route info: " . json_encode($routeInfo));
 
         return Response::html('
             <!DOCTYPE html>
@@ -200,7 +208,6 @@ final class UserAction
             throw new InvalidArgumentException('Invalid slug format');
         }
 
-        // User ID kann String oder Integer sein - keine Validierung nötig
     }
 
     private function determineRoute(Request $request, array $params): array

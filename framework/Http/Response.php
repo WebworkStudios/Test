@@ -407,35 +407,52 @@ final class Response
      */
     public function send(): void
     {
+        error_log("=== Response::send() START ===");
+        error_log("Status: " . $this->status);
+        error_log("Content-Type: " . ($this->getHeader('content-type') ?? 'not set'));
+        error_log("Body length: " . strlen($this->body));
+        error_log("Body preview: " . substr($this->body, 0, 100) . "...");
+
         // Prevent output before headers
-        if (headers_sent()) {
+        if (headers_sent($file, $line)) {
+            error_log("❌ Headers already sent in {$file}:{$line}");
             throw new RuntimeException('Headers already sent');
         }
 
         // Set status code
         http_response_code($this->status);
+        error_log("HTTP status set to: " . $this->status);
 
         // Send headers
         foreach ($this->headers->all() as $name => $value) {
             header("{$name}: {$value}");
+            error_log("Header sent: {$name}: {$value}");
         }
 
         // Send cookies
         foreach ($this->cookies as $cookie) {
             header('Set-Cookie: ' . $cookie->toHeaderValue(), false);
+            error_log("Cookie sent: " . $cookie->toHeaderValue());
         }
+
+        error_log("=== About to echo body ===");
 
         // Send body
         echo $this->body;
 
+        error_log("=== Body echoed ===");
+
         // Ensure output is sent immediately
         if (function_exists('fastcgi_finish_request')) {
             fastcgi_finish_request();
+            error_log("fastcgi_finish_request() called");
         } else {
             flush();
+            error_log("flush() called");
         }
-    }
 
+        error_log("=== Response::send() COMPLETE ===");
+    }
     /**
      * Get response body
      */
