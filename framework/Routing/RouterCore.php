@@ -6,9 +6,8 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use Framework\Container\ContainerInterface;
-use Framework\Http\{Request, Response};
+use Framework\Http\{Request, RequestSanitizer, Response};
 use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
-use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -59,8 +58,8 @@ final class RouterCore
             $this->loadRouteCache();
 
             $method = strtoupper($request->method);
-            $path = $this->sanitizePath($request->path);
-            $subdomain = $this->extractSubdomain($request->host());
+            $path = RequestSanitizer::sanitizePath($request->path);
+            $subdomain = RequestSanitizer::extractSubdomain($request->host(), $this->allowedSubdomains);
 
             // ✅ O(1) Static Route Lookup
             $staticKey = $subdomain ? "{$subdomain}:{$path}" : $path;
@@ -112,97 +111,6 @@ final class RouterCore
         }
     }
 
-    /**
-     * Secure path sanitization
-     */
-    private function sanitizePath(string $path): string
-    {
-        // ✅ ERWEITERTE PATH TRAVERSAL PROTECTION
-        $dangerous = [
-            '../', '..\\', '..../', '...//', '....//',
-            '%2e%2e%2f', '%2e%2e%5c', '%2e%2e/',
-            '%2E%2E%2F', '%2E%2E%5C', '%2E%2E/',
-            "\0", '/./', '/.//', '/../',
-            '%00', '%2F%2E%2E', '%5C%2E%2E',
-            // ✅ ZUSÄTZLICHE GEFÄHRLICHE PATTERNS
-            'php://', 'file://', 'data://', 'zip://',
-            '\\.\\', '//\\', '\\/\\', '\\\\',
-            '%5c%5c', '%2f%5c', '%5c%2f'
-        ];
-
-        // Mehrfache Bereinigung bis keine Änderungen mehr
-        do {
-            $before = $path;
-            $path = str_ireplace($dangerous, '', $path);  // Case-insensitive
-            $path = urldecode($path);  // Decode nach jedem Durchgang
-        } while ($before !== $path);
-
-        // ✅ ZUSÄTZLICHE VALIDIERUNG
-        if (preg_match('/[^\x20-\x7E]/', $path)) {
-            throw new InvalidArgumentException('Path contains non-printable characters');
-        }
-
-        if (preg_match('/^[A-Z]:[\\\\\/]/', $path)) {
-            throw new InvalidArgumentException('Absolute file paths not allowed in URL');
-        }
-
-        $cleaned = str_replace('\\', '/', $path);
-        if (!str_starts_with($cleaned, '/')) {
-            $cleaned = '/' . $cleaned;
-        }
-        $cleaned = preg_replace('#/+#', '/', $cleaned);
-
-        if (strlen($cleaned) > 2048) {
-            throw new InvalidArgumentException('Path too long');
-        }
-
-        return $cleaned;
-    }
-
-    /**
-     * Extract subdomain from host
-     */
-    private function extractSubdomain(string $host): ?string
-    {
-        $hostWithoutPort = explode(':', $host)[0];
-
-        // Handle localhost und IP-Adressen
-        if ($hostWithoutPort === 'localhost' || filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
-            return null;
-        }
-
-        // Handle .local/.localhost domains
-        if (str_ends_with($hostWithoutPort, '.local') || str_ends_with($hostWithoutPort, '.localhost')) {
-            return null;
-        }
-
-        // Production domains (mindestens 3 Teile für Subdomain)
-        $parts = explode('.', $hostWithoutPort);
-        if (count($parts) < 3) {
-            return null;
-        }
-
-        $subdomain = $parts[0];
-        if (!$this->isValidSubdomain($subdomain)) {
-            return null;
-        }
-
-        // Check allowed subdomains
-        if (!in_array($subdomain, $this->allowedSubdomains, true)) {
-            return null;
-        }
-
-        return $subdomain;
-    }
-
-    /**
-     * Validate subdomain format
-     */
-    private function isValidSubdomain(string $subdomain): bool
-    {
-        return strlen($subdomain) <= 63 &&
-            preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
-    }
 
     /**
      * Call action class
@@ -246,7 +154,7 @@ final class RouterCore
                 // Extract parameters
                 for ($i = 1; $i < count($matches); $i++) {
                     $paramName = $route['params'][$i - 1] ?? "param{$i}";
-                    $params[$paramName] = $this->sanitizeParameter($matches[$i]);
+                    $params[$paramName] = RequestSanitizer::sanitizeParameter($matches[$i]);
                 }
 
                 return $this->callAction($route['class'], $request, $params);
@@ -291,22 +199,6 @@ final class RouterCore
 
         throw new RouteNotFoundException("Route not found: {$method} {$path}" .
             ($subdomain ? " (subdomain: {$subdomain})" : ""));
-    }
-
-    /**
-     * Sanitize route parameter
-     */
-    private function sanitizeParameter(string $value): string
-    {
-        if (strlen($value) > 255) {
-            throw new InvalidArgumentException("Parameter value too long");
-        }
-
-        if (str_contains($value, "\0")) {
-            throw new InvalidArgumentException("Parameter contains null bytes");
-        }
-
-        return $value;
     }
 
     /**

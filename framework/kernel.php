@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Framework;
 
 use Framework\Container\Container;
-use Framework\Http\{Request, Response};
+use Framework\Http\{Request, RequestSanitizer, Response};
 use framework\Http\Session\Session;
 use Framework\Routing\{Attributes\Route,
     Exceptions\MethodNotAllowedException,
@@ -96,12 +96,20 @@ final class Kernel
     /**
      * Handle incoming HTTP request with performance optimizations
      */
+    /**
+     * Handle incoming HTTP request with performance optimizations
+     */
     public function handle(Request $request): Response
     {
         error_log("=== Kernel::handle() START ===");
         error_log("Request: " . $request->method . " " . $request->path);
 
         try {
+            // ✅ Umfassende Request-Validierung mit RequestSanitizer
+            error_log("🔒 Validating request security...");
+            RequestSanitizer::validateRequest($request);
+            error_log("✅ Request security validation passed");
+
             error_log("🔄 Starting boot process...");
             $this->boot();
             error_log("✅ Boot completed");

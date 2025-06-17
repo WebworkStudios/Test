@@ -23,7 +23,7 @@ use Throwable;
 final class RouteDiscovery
 {
     // PHP 8.4 Property Hooks for computed properties
-private const int MAX_CACHE_SIZE = 200;
+    private const int MAX_CACHE_SIZE = 200;
     public int $maxDepth {
         get => $this->config['max_depth'] ?? 10;
     }
@@ -43,7 +43,7 @@ private const int MAX_CACHE_SIZE = 200;
             ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
             : 0.0;
     }
-        private array $classCache = []; // Reduced from unlimited
+    private array $classCache = []; // Reduced from unlimited
 
     public function __construct(
         private readonly Router           $router,

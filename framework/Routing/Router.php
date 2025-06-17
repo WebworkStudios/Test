@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use Framework\Container\ContainerInterface;
-use Framework\Http\{Request, Response};
+use Framework\Http\{Request, RequestSanitizer, Response};
 use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
 use InvalidArgumentException;
 use RuntimeException;
@@ -173,8 +173,8 @@ final class Router
         $this->compileRoutes();
 
         $method = strtoupper($request->method);
-        $path = $this->sanitizePath($request->path);
-        $subdomain = $this->extractSubdomain($request->host());
+        $path = RequestSanitizer::sanitizePath($request->path);
+        $subdomain = RequestSanitizer::extractSubdomain($request->host(), $this->allowedSubdomains);
 
         // Debug logging nur im Debug-Mode
         if ($this->debugMode && str_contains($path, 'user')) {
@@ -225,79 +225,6 @@ final class Router
         if ($this->cache !== null && !$this->debugMode) {
             $this->cache->store($this->routes);
         }
-    }
-
-    /**
-     * Sanitize path - from Phase 1 security fix
-     */
-    private function sanitizePath(string $path): string
-    {
-        $dangerous = [
-            '../', '..\\', '..../', '...//', '....//',
-            '%2e%2e%2f', '%2e%2e%5c', '%2e%2e/',
-            '%2E%2E%2F', '%2E%2E%5C', '%2E%2E/',
-            "\0", '/./', '/.//', '/../',
-            '%00', '%2F%2E%2E', '%5C%2E%2E'
-        ];
-
-        do {
-            $before = $path;
-            $path = str_replace($dangerous, '', $path);
-        } while ($before !== $path);
-
-        if (preg_match('/^[A-Z]:[\\\\\/]/', $path)) {
-            throw new InvalidArgumentException('Absolute file paths not allowed in URL');
-        }
-
-        $cleaned = str_replace('\\', '/', $path);
-        if (!str_starts_with($cleaned, '/')) {
-            $cleaned = '/' . $cleaned;
-        }
-        $cleaned = preg_replace('#/+#', '/', $cleaned);
-
-        if (strlen($cleaned) > 2048) {
-            throw new InvalidArgumentException('Path too long');
-        }
-
-        return $cleaned;
-    }
-
-    /**
-     * Extract subdomain from host
-     */
-    private function extractSubdomain(string $host): ?string
-    {
-        $hostWithoutPort = explode(':', $host)[0];
-
-        if ($hostWithoutPort === 'localhost' || filter_var($hostWithoutPort, FILTER_VALIDATE_IP)) {
-            return null;
-        }
-
-        if (str_ends_with($hostWithoutPort, '.local') || str_ends_with($hostWithoutPort, '.localhost')) {
-            return null;
-        }
-
-        $parts = explode('.', $hostWithoutPort);
-        if (count($parts) < 3) {
-            return null;
-        }
-
-        $subdomain = $parts[0];
-        if (!$this->isValidSubdomain($subdomain)) {
-            return null;
-        }
-
-        if ($this->strictMode && !in_array($subdomain, $this->allowedSubdomains, true)) {
-            throw new InvalidArgumentException("Subdomain not allowed: {$subdomain}");
-        }
-
-        return $subdomain;
-    }
-
-    private function isValidSubdomain(string $subdomain): bool
-    {
-        return strlen($subdomain) <= 63 &&
-            preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
     }
 
     /**
@@ -455,7 +382,6 @@ final class Router
     {
         $this->validateMiddleware($middleware);
         $this->validateRouteName($name);
-        $this->validateSubdomain($subdomain);
 
         // Create route info
         $routeInfo = RouteInfo::fromPath(
@@ -512,12 +438,6 @@ final class Router
         }
     }
 
-    private function validateSubdomain(?string $subdomain): void
-    {
-        if ($subdomain !== null && !$this->isValidSubdomain($subdomain)) {
-            throw new InvalidArgumentException("Invalid subdomain: {$subdomain}");
-        }
-    }
 
     /**
      * Generate URL for named route
@@ -583,7 +503,7 @@ final class Router
         $this->compileRoutes();
 
         $method = strtoupper($method);
-        $path = $this->sanitizePath($path);
+        $path = RequestSanitizer::sanitizePath($path);
 
         return $this->findMatchingRoute($method, $path, $subdomain) !== null;
     }

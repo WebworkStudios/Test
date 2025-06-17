@@ -13,8 +13,8 @@ use ReflectionException;
 final class RouteFileScanner
 {
     // PHP 8.4 Property Hooks for computed properties
-private const int MAX_CACHE_SIZE = 500;
-private const int MAX_CONTENT_CACHE = 100;
+    private const int MAX_CACHE_SIZE = 500;
+    private const int MAX_CONTENT_CACHE = 100;
     public int $maxFileSize {
         get => $this->config['max_file_size'] ?? 1048576; // 1MB (reduced)
     }
@@ -23,10 +23,10 @@ private const int MAX_CONTENT_CACHE = 100;
     public bool $strictMode {
         get => $this->config['strict_mode'] ?? false; // ✅ Default false
     }
-        public int $cacheHitRatio {
+    public int $cacheHitRatio {
         get => $this->totalFiles > 0 ? (int)(($this->cacheHits / $this->totalFiles) * 100) : 0;
     } // ✅ Cache file contents
-        private array $fileCache = []; // Reduced from 1000
+    private array $fileCache = []; // Reduced from 1000
     private array $contentCache = []; // New content cache
 
     // Performance tracking

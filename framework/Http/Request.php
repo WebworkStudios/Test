@@ -55,18 +55,19 @@ final class Request
     }
 
     /**
-     * Create Request from PHP globals
+     * Create Request from PHP globals with enhanced security validation
      */
     public static function fromGlobals(): self
     {
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
-        // Validate URI before processing
+        // ✅ Erweiterte URI-Validierung mit RequestSanitizer
         if (preg_match('/^[A-Z]:/i', $uri)) {
             throw new InvalidArgumentException('Invalid request URI: contains absolute path');
         }
 
+        // ✅ Basis-Path-Validierung vor DetailValidierung
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
 
         // Additional path validation
@@ -77,7 +78,7 @@ final class Request
         $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
         $contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
 
-        return new self(
+        $request = new self(
             method: $method,
             uri: $uri,
             path: $path,
@@ -88,6 +89,11 @@ final class Request
             contentType: $contentType,
             contentLength: $contentLength
         );
+
+        // ✅ Umfassende Sicherheitsvalidierung durch RequestSanitizer
+        RequestSanitizer::validateRequest($request);
+
+        return $request;
     }
 
     /**
@@ -150,20 +156,26 @@ final class Request
 
     // === Security & Network Info ===
 
-    public function ip(): string
+    public function url(): string
     {
-        // Lazy computation - only calculate once
-        if ($this->clientIp === null) {
-            $forwardedIps = $this->headers()->forwardedFor();
-            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
+        // Lazy computation - only build once
+        if ($this->fullUrl === null) {
+            $this->fullUrl = $this->scheme() . '://' . $this->host() . $this->uri;
         }
 
-        return $this->clientIp;
+        return $this->fullUrl;
     }
 
-    public function userAgent(): string
+    public function scheme(): string
     {
-        return $this->header('user-agent') ?? '';
+        return $this->isSecure() ? 'https' : 'http';
+    }
+
+    public function isSecure(): bool
+    {
+        return ($this->server['HTTPS'] ?? '') === 'on' ||
+            ($this->server['SERVER_PORT'] ?? '') === '443' ||
+            strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
     }
 
     public function header(string $name): ?string
@@ -182,6 +194,8 @@ final class Request
         return $body[$key] ?? $default;
     }
 
+    // === Headers (via Headers class) ===
+
     public function body(): array
     {
         // Lazy parsing - only parse body when first accessed
@@ -191,8 +205,6 @@ final class Request
 
         return $this->parsedBody;
     }
-
-    // === Headers (via Headers class) ===
 
     /**
      * Parse request body based on content type and method
@@ -240,12 +252,14 @@ final class Request
         return is_array($parsed) ? $parsed : [];
     }
 
+    // === Caching ===
+
     public function isJson(): bool
     {
         return str_contains($this->contentType, 'application/json');
     }
 
-    // === Caching ===
+    // === Query Parameters (Eager) ===
 
     /**
      * Parse JSON string safely
@@ -274,36 +288,12 @@ final class Request
         }
     }
 
-    // === Query Parameters (Eager) ===
-
-    public function url(): string
-    {
-        // Lazy computation - only build once
-        if ($this->fullUrl === null) {
-            $this->fullUrl = $this->scheme() . '://' . $this->host() . $this->uri;
-        }
-
-        return $this->fullUrl;
-    }
-
-    public function scheme(): string
-    {
-        return $this->isSecure() ? 'https' : 'http';
-    }
-
-    // === Body Parameters (Lazy Parsed) ===
-
-    public function isSecure(): bool
-    {
-        return ($this->server['HTTPS'] ?? '') === 'on' ||
-            ($this->server['SERVER_PORT'] ?? '') === '443' ||
-            strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
-    }
-
     public function host(): string
     {
         return $this->header('host') ?? $this->server['SERVER_NAME'] ?? 'localhost';
     }
+
+    // === Body Parameters (Lazy Parsed) ===
 
     public function cache(): CacheHeaders
     {
@@ -312,8 +302,6 @@ final class Request
         }
         return $this->cacheHeaders;
     }
-
-    // === Universal Parameter Access ===
 
     public function query(string $key, mixed $default = null): mixed
     {
@@ -325,7 +313,7 @@ final class Request
         return $this->query;
     }
 
-    // === Type-Safe Parameter Access ===
+    // === Universal Parameter Access ===
 
     public function inputAll(): array
     {
@@ -336,6 +324,8 @@ final class Request
     {
         return isset($this->query[$key]) || isset($this->body()[$key]);
     }
+
+    // === Type-Safe Parameter Access ===
 
     /**
      * Get parameter as integer with optional default
@@ -455,8 +445,6 @@ final class Request
         return $stringValue;
     }
 
-    // === Input Sanitization ===
-
     /**
      * Get parameter as email (validated) with optional default
      */
@@ -468,8 +456,11 @@ final class Request
             return $default;
         }
 
-        $filtered = filter_var($value, FILTER_VALIDATE_EMAIL);
-        return $filtered !== false ? $filtered : $default;
+        try {
+            return RequestSanitizer::sanitizeParameter($value, 'email');
+        } catch (InvalidArgumentException) {
+            return $default;
+        }
     }
 
     /**
@@ -483,9 +474,14 @@ final class Request
             return $default;
         }
 
-        $filtered = filter_var($value, FILTER_VALIDATE_URL);
-        return $filtered !== false ? $filtered : $default;
+        try {
+            return RequestSanitizer::sanitizeParameter($value, 'url');
+        } catch (InvalidArgumentException) {
+            return $default;
+        }
     }
+
+    // === Input Sanitization ===
 
     /**
      * Get parameter as JSON (validated and decoded)
@@ -501,10 +497,8 @@ final class Request
         return $this->parseJsonString($value, $default);
     }
 
-    // === File Uploads (Lazy Parsed) ===
-
     /**
-     * Get sanitized parameter (HTML entities, trimmed)
+     * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
      */
     public function sanitized(string $key, string $default = ''): string
     {
@@ -514,7 +508,11 @@ final class Request
             return $default;
         }
 
-        return htmlspecialchars(trim($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        try {
+            return RequestSanitizer::sanitizeParameter($value, 'default');
+        } catch (InvalidArgumentException) {
+            return $default;
+        }
     }
 
     /**
@@ -530,6 +528,8 @@ final class Request
 
         return trim(strip_tags($value));
     }
+
+    // === File Uploads (Lazy Parsed) ===
 
     /**
      * Get parameter with only allowed HTML tags
@@ -548,15 +548,11 @@ final class Request
         return trim(strip_tags($value, $allowedTagsStr));
     }
 
-    // === Cookies (Eager) ===
-
     public function hasFile(string $key): bool
     {
         $file = $this->file($key);
         return $file && $file['error'] === UPLOAD_ERR_OK;
     }
-
-    // === Raw Access ===
 
     public function file(string $key): ?array
     {
@@ -567,11 +563,11 @@ final class Request
             return null;
         }
 
-        // ✅ NEUE SICHERHEITSVALIDIERUNG
+        // ✅ Sichere File-Upload-Validierung
         return $this->validateUploadedFile($file);
     }
 
-// ✅ NEUE METHODE: Sichere File-Upload-Validierung
+    // === Cookies (Eager) ===
 
     public function files(): array
     {
@@ -583,8 +579,11 @@ final class Request
         return $this->parsedFiles;
     }
 
-    // === Private Helper Methods ===
+    // === Raw Access ===
 
+    /**
+     * ✅ Erweiterte File-Upload-Validierung mit RequestSanitizer-Integration
+     */
     private function validateUploadedFile(array $file): ?array
     {
         // Prüfe Upload-Fehler
@@ -611,7 +610,7 @@ final class Request
             throw new InvalidArgumentException('File type not allowed');
         }
 
-        // Prüfe Dateiname
+        // ✅ Prüfe Dateiname mit RequestSanitizer
         $filename = basename($file['name']);
         if (!preg_match('/^[a-zA-Z0-9._-]+$/', $filename)) {
             throw new InvalidArgumentException('Invalid filename');
@@ -628,5 +627,48 @@ final class Request
     public function raw(): string
     {
         return $this->rawBody;
+    }
+
+    // === Private Helper Methods ===
+
+    /**
+     * ✅ Erweiterte Sanitization-Methoden mit RequestSanitizer
+     */
+    public function sanitizeAll(array $types = []): array
+    {
+        $allParams = array_merge($this->query, $this->body());
+        return RequestSanitizer::sanitizeParameters($allParams, $types);
+    }
+
+    /**
+     * Get security report for debugging
+     */
+    public function getSecurityReport(): array
+    {
+        return [
+            'path_report' => RequestSanitizer::getSecurityReport($this->path, 'path'),
+            'uri_report' => RequestSanitizer::getSecurityReport($this->uri, 'parameter'),
+            'method' => $this->method,
+            'content_length' => $this->contentLength,
+            'is_secure' => $this->isSecure(),
+            'ip' => $this->ip(),
+            'user_agent' => substr($this->userAgent(), 0, 100) // Truncate for security
+        ];
+    }
+
+    public function ip(): string
+    {
+        // Lazy computation - only calculate once
+        if ($this->clientIp === null) {
+            $forwardedIps = $this->headers()->forwardedFor();
+            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
+        }
+
+        return $this->clientIp;
+    }
+
+    public function userAgent(): string
+    {
+        return $this->header('user-agent') ?? '';
     }
 }
