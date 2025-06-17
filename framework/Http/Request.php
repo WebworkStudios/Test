@@ -153,13 +153,6 @@ final class Request
         return $this->headers()->isAjax();
     }
 
-    public function isJson(): bool
-    {
-        return str_contains($this->contentType, 'application/json');
-    }
-
-    // === Security & Network Info ===
-
     public function url(): string
     {
         // Lazy computation - only build once
@@ -169,6 +162,8 @@ final class Request
 
         return $this->fullUrl;
     }
+
+    // === Security & Network Info ===
 
     public function scheme(): string
     {
@@ -182,55 +177,21 @@ final class Request
             strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
     }
 
-    public function host(): string
-    {
-        return $this->header('host') ?? $this->server['SERVER_NAME'] ?? 'localhost';
-    }
-
     public function header(string $name): ?string
     {
         return $this->headers()->get($name);
     }
 
-    public function ip(): string
+    public function get(string $key, mixed $default = null): mixed
     {
-        // Lazy computation - only calculate once
-        if ($this->clientIp === null) {
-            $forwardedIps = $this->headers()->forwardedFor();
-            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
-        }
-
-        return $this->clientIp;
+        return $this->query[$key] ?? $this->input($key, $default);
     }
 
-    public function userAgent(): string
+    public function input(string $key, mixed $default = null): mixed
     {
-        return $this->header('user-agent') ?? '';
+        $body = $this->body();
+        return $body[$key] ?? $default;
     }
-
-    // === Caching ===
-
-    public function cache(): CacheHeaders
-    {
-        if ($this->cacheHeaders === null) {
-            $this->cacheHeaders = new CacheHeaders($this->headers());
-        }
-        return $this->cacheHeaders;
-    }
-
-    // === Query Parameters (Eager) ===
-
-    public function query(string $key, mixed $default = null): mixed
-    {
-        return $this->query[$key] ?? $default;
-    }
-
-    public function queryAll(): array
-    {
-        return $this->query;
-    }
-
-    // === Body Parameters (Lazy Parsed) ===
 
     public function body(): array
     {
@@ -288,6 +249,15 @@ final class Request
         return is_array($parsed) ? $parsed : [];
     }
 
+    // === Caching ===
+
+    public function isJson(): bool
+    {
+        return str_contains($this->contentType, 'application/json');
+    }
+
+    // === Query Parameters (Eager) ===
+
     /**
      * Parse JSON string safely
      */
@@ -315,6 +285,31 @@ final class Request
         }
     }
 
+    public function host(): string
+    {
+        return $this->header('host') ?? $this->server['SERVER_NAME'] ?? 'localhost';
+    }
+
+    // === Body Parameters (Lazy Parsed) ===
+
+    public function cache(): CacheHeaders
+    {
+        if ($this->cacheHeaders === null) {
+            $this->cacheHeaders = new CacheHeaders($this->headers());
+        }
+        return $this->cacheHeaders;
+    }
+
+    public function query(string $key, mixed $default = null): mixed
+    {
+        return $this->query[$key] ?? $default;
+    }
+
+    public function queryAll(): array
+    {
+        return $this->query;
+    }
+
     public function inputAll(): array
     {
         return $this->body();
@@ -322,23 +317,10 @@ final class Request
 
     // === Universal Parameter Access ===
 
-    public function get(string $key, mixed $default = null): mixed
-    {
-        return $this->query[$key] ?? $this->input($key, $default);
-    }
-
-    public function input(string $key, mixed $default = null): mixed
-    {
-        $body = $this->body();
-        return $body[$key] ?? $default;
-    }
-
     public function has(string $key): bool
     {
         return isset($this->query[$key]) || isset($this->body()[$key]);
     }
-
-    // === Type-Safe Parameter Access ===
 
     /**
      * Get parameter as integer with optional default
@@ -374,6 +356,8 @@ final class Request
         return $filtered !== false ? $filtered : $default;
     }
 
+    // === Type-Safe Parameter Access ===
+
     /**
      * Get parameter as boolean
      * Handles checkbox values, string representations, etc.
@@ -392,27 +376,6 @@ final class Request
             },
             default => (bool)$value
         };
-    }
-
-    /**
-     * Get parameter as string with optional default and size limit
-     */
-    public function string(string $key, string $default = ''): string
-    {
-        $value = $this->get($key);
-
-        if ($value === null || $value === '') {
-            return $default;
-        }
-
-        $stringValue = (string)$value;
-
-        // Check size limit
-        if (strlen($stringValue) > self::MAX_STRING_LENGTH) {
-            return $default; // Return default for oversized input
-        }
-
-        return $stringValue;
     }
 
     /**
@@ -457,7 +420,34 @@ final class Request
         }
     }
 
-    // === Input Sanitization ===
+    /**
+     * Get parameter as string with optional default and size limit
+     */
+    public function string(string $key, string $default = ''): string
+    {
+        $value = $this->get($key);
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        $stringValue = (string)$value;
+
+        // Check size limit
+        if (strlen($stringValue) > self::MAX_STRING_LENGTH) {
+            return $default; // Return default for oversized input
+        }
+
+        return $stringValue;
+    }
+
+    /**
+     * Get parameter with HTML tags stripped
+     */
+    public function stripped(string $key, string $default = ''): string
+    {
+        return $this->sanitized($key, $default); // Vereinheitlichung mit sanitized()
+    }
 
     /**
      * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
@@ -477,13 +467,7 @@ final class Request
         }
     }
 
-    /**
-     * Get parameter with HTML tags stripped
-     */
-    public function stripped(string $key, string $default = ''): string
-    {
-        return $this->sanitized($key, $default); // Vereinheitlichung mit sanitized()
-    }
+    // === Input Sanitization ===
 
     /**
      * Get parameter with only allowed HTML tags
@@ -553,8 +537,6 @@ final class Request
         return $this->parseJsonString($value, $default);
     }
 
-    // === File Uploads (Lazy Parsed) ===
-
     public function hasFile(string $key): bool
     {
         $file = $this->file($key);
@@ -573,6 +555,8 @@ final class Request
         // Sichere File-Upload-Validierung
         return $this->validateUploadedFile($file);
     }
+
+    // === File Uploads (Lazy Parsed) ===
 
     public function files(): array
     {
@@ -622,21 +606,17 @@ final class Request
         return $file;
     }
 
-    // === Cookies (Eager) ===
-
     public function cookie(string $name, mixed $default = null): mixed
     {
         return $this->cookies[$name] ?? $default;
     }
-
-    // === Raw Access ===
 
     public function raw(): string
     {
         return $this->rawBody;
     }
 
-    // === Batch Sanitization ===
+    // === Cookies (Eager) ===
 
     /**
      * Erweiterte Sanitization-Methoden mit RequestSanitizer
@@ -646,6 +626,8 @@ final class Request
         $allParams = array_merge($this->query, $this->body());
         return RequestSanitizer::sanitizeParameters($allParams, $types);
     }
+
+    // === Raw Access ===
 
     /**
      * Get security report for debugging
@@ -661,5 +643,23 @@ final class Request
             'ip' => $this->ip(),
             'user_agent' => substr($this->userAgent(), 0, 100) // Truncate for security
         ];
+    }
+
+    // === Batch Sanitization ===
+
+    public function ip(): string
+    {
+        // Lazy computation - only calculate once
+        if ($this->clientIp === null) {
+            $forwardedIps = $this->headers()->forwardedFor();
+            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
+        }
+
+        return $this->clientIp;
+    }
+
+    public function userAgent(): string
+    {
+        return $this->header('user-agent') ?? '';
     }
 }

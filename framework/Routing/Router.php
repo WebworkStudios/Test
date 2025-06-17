@@ -51,6 +51,40 @@ final class Router
     }
 
     /**
+     * Load cached routes using RouteCacheBuilder
+     */
+    private function loadCachedRoutes(): void
+    {
+        if ($this->cache === null || $this->debugMode) {
+            return;
+        }
+
+        // Nutze RouteCacheBuilder statt eigene Logik
+        if (RouteCacheBuilder::validateCache()) {
+            $cached = $this->cache->load();
+            if ($cached !== null) {
+                $this->routes = $cached;
+                $this->rebuildNamedRoutes();
+            }
+        }
+    }
+
+    /**
+     * Rebuild named routes from cached data
+     */
+    private function rebuildNamedRoutes(): void
+    {
+        $this->namedRoutes = [];
+        foreach ($this->routes as $routes) {
+            foreach ($routes as $route) {
+                if ($route->name !== null) {
+                    $this->namedRoutes[$route->name] = $route;
+                }
+            }
+        }
+    }
+
+    /**
      * Create router with default configuration
      */
     public static function create(ContainerInterface $container, array $config = []): self
@@ -83,40 +117,6 @@ final class Router
             allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
             baseDomain: $config['base_domain'] ?? 'localhost'
         );
-    }
-
-    /**
-     * Load cached routes using RouteCacheBuilder
-     */
-    private function loadCachedRoutes(): void
-    {
-        if ($this->cache === null || $this->debugMode) {
-            return;
-        }
-
-        // Nutze RouteCacheBuilder statt eigene Logik
-        if (RouteCacheBuilder::validateCache()) {
-            $cached = $this->cache->load();
-            if ($cached !== null) {
-                $this->routes = $cached;
-                $this->rebuildNamedRoutes();
-            }
-        }
-    }
-
-    /**
-     * Rebuild named routes from cached data
-     */
-    private function rebuildNamedRoutes(): void
-    {
-        $this->namedRoutes = [];
-        foreach ($this->routes as $routes) {
-            foreach ($routes as $route) {
-                if ($route->name !== null) {
-                    $this->namedRoutes[$route->name] = $route;
-                }
-            }
-        }
     }
 
     /**

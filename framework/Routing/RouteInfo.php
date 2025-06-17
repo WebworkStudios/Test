@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
-use Framework\Http\RequestSanitizer;
 use InvalidArgumentException;
 use Throwable;
 
@@ -70,7 +69,7 @@ final class RouteInfo
     }
 
     /**
-     * Fast route creation
+     * Fast route creation mit zentraler Pattern-Kompilierung
      */
     public static function fromPath(
         string  $method,
@@ -84,107 +83,20 @@ final class RouteInfo
     {
         $method = strtoupper($method);
 
-        // Cache pattern compilation
-        static $patternCache = [];
-        $pathKey = $path;
-
-        if (!isset($patternCache[$pathKey])) {
-            $patternCache[$pathKey] = [
-                'pattern' => self::compilePattern($path),
-                'params' => self::extractParameterNames($path)
-            ];
-        }
-
-        $cached = $patternCache[$pathKey];
+        // Nutze zentrale Pattern-Kompilierung
+        $compiled = RoutePatternCompiler::compile($path);
 
         return new self(
             $method,
             $path,
-            $cached['pattern'],
-            $cached['params'],
+            $compiled['pattern'],
+            $compiled['params'],
             $actionClass,
             $middleware,
             $name,
             $subdomain,
             $options
         );
-    }
-
-    /**
-     * Sichere Pattern-Kompilierung
-     */
-    private static function compilePattern(string $path): string
-    {
-        // Fast path for static routes
-        if (!str_contains($path, '{')) {
-            return '#^' . preg_quote($path, '#') . '$#';
-        }
-
-        // Sichere Lösung: Schritt-für-Schritt ohne Escape-Konflikte
-
-        // Schritt 1: Ersetze Parameter durch eindeutige Platzhalter
-        $placeholders = [];
-        $placeholderIndex = 0;
-
-        $processedPath = preg_replace_callback(
-            '/\{([^}]+)}/',
-            function ($matches) use (&$placeholders, &$placeholderIndex) {
-                $param = $matches[1];
-                $placeholder = "PLACEHOLDER_{$placeholderIndex}";
-                $placeholders[$placeholder] = self::getConstraintPattern($param);
-                $placeholderIndex++;
-                return $placeholder;
-            },
-            $path
-        );
-
-        // Schritt 2: Escape den Pfad (jetzt ohne Parameter)
-        $escapedPath = preg_quote($processedPath, '#');
-
-        // Schritt 3: Ersetze Platzhalter durch Regex-Muster
-        foreach ($placeholders as $placeholder => $pattern) {
-            $escapedPath = str_replace($placeholder, $pattern, $escapedPath);
-        }
-
-        return '#^' . $escapedPath . '$#';
-    }
-
-    /**
-     * Cached constraint patterns
-     */
-    private static function getConstraintPattern(string $param): string
-    {
-        static $constraintCache = [
-            'int' => '(\d+)',
-            'integer' => '(\d+)',
-            'uuid' => '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
-            'slug' => '([a-z0-9-]+)',
-            'alpha' => '([a-zA-Z]+)',
-            'alnum' => '([a-zA-Z0-9]+)'
-        ];
-
-        if (str_contains($param, ':')) {
-            [, $constraint] = explode(':', $param, 2);
-            return $constraintCache[$constraint] ?? '([^/]+)';
-        }
-
-        return '([^/]+)';
-    }
-
-    /**
-     * Fast parameter extraction
-     */
-    private static function extractParameterNames(string $path): array
-    {
-        if (!str_contains($path, '{')) {
-            return [];
-        }
-
-        preg_match_all('/\{([^}]+)}/', $path, $matches);
-
-        return array_map(function ($match) {
-            return str_contains($match, ':') ? explode(':', $match, 2)[0] : $match;
-        }, $matches[1]);
     }
 
     /**
@@ -235,7 +147,7 @@ final class RouteInfo
     }
 
     /**
-     * Sichere extractParams() mit Fehlerbehandlung
+     * Parameter-Extraktion mit Pattern-Compiler-Validierung
      */
     public function extractParams(string $path): array
     {
@@ -249,49 +161,24 @@ final class RouteInfo
             }
 
             $params = [];
-            $constraints = $this->getParameterConstraints();
+            $compiled = RoutePatternCompiler::compile($this->originalPath);
 
             foreach ($this->paramNames as $index => $name) {
                 $value = $matches[$index + 1] ?? '';
 
-                // Nutze RequestSanitizer für konsistente Validierung
-                if (isset($constraints[$name])) {
-                    $value = RequestSanitizer::sanitizeParameter($value, $constraints[$name]);
-                } else {
-                    $value = RequestSanitizer::sanitizeParameter($value);
-                }
-
-                $params[$name] = $value;
+                // Nutze Pattern-Compiler für Validierung
+                $params[$name] = RoutePatternCompiler::validateParameter(
+                    $name,
+                    $value,
+                    $compiled['constraints']
+                );
             }
 
             return $params;
 
         } catch (Throwable $e) {
-            error_log("❌ Parameter extraction error for pattern '{$this->pattern}' and path '{$path}': " . $e->getMessage());
             throw new InvalidArgumentException("Failed to extract parameters: " . $e->getMessage());
         }
-    }
-
-    /**
-     * Cached parameter constraints
-     */
-    private function getParameterConstraints(): array
-    {
-        if ($this->cachedConstraints !== null) {
-            return $this->cachedConstraints;
-        }
-
-        $constraints = [];
-        preg_match_all('/\{([^}]+)}/', $this->originalPath, $matches);
-
-        foreach ($matches[1] as $match) {
-            if (str_contains($match, ':')) {
-                [$name, $constraint] = explode(':', $match, 2);
-                $constraints[$name] = $constraint;
-            }
-        }
-
-        return $this->cachedConstraints = $constraints;
     }
 
     /**
