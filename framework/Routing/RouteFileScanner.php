@@ -9,28 +9,35 @@ use ReflectionException;
 use ReflectionMethod;
 
 /**
- * Optimized file scanner for route discovery with PHP 8.4 features
+ * ✅ OPTIMIZED: Fast file scanner with intelligent caching
  */
 final class RouteFileScanner
 {
     // PHP 8.4 Property Hooks for computed properties
     public int $maxFileSize {
-        get => $this->config['max_file_size'] ?? 2097152; // 2MB
+        get => $this->config['max_file_size'] ?? 1048576; // 1MB (reduced)
     }
 
     public bool $strictMode {
-        get => $this->config['strict_mode'] ?? true;
+        get => $this->config['strict_mode'] ?? false; // ✅ Default false
     }
 
     public int $cacheHitRatio {
         get => $this->totalFiles > 0 ? (int)(($this->cacheHits / $this->totalFiles) * 100) : 0;
     }
 
-    // Performance tracking
+    // ✅ OPTIMIZED: Smaller, smarter cache
     private array $fileCache = [];
-    private array $compiledPatterns = [];
+    private array $contentCache = []; // ✅ Cache file contents
+    private const int MAX_CACHE_SIZE = 500; // Reduced from 1000
+    private const int MAX_CONTENT_CACHE = 100; // New content cache
+
+    // Performance tracking
     private int $cacheHits = 0;
     private int $totalFiles = 0;
+
+    // ✅ OPTIMIZED: Pre-compiled patterns for speed
+    private array $patterns;
 
     public function __construct(
         private readonly array $config = []
@@ -40,23 +47,41 @@ final class RouteFileScanner
     }
 
     /**
-     * Initialize compiled regex patterns for better performance
+     * ✅ OPTIMIZED: Pre-compile all regex patterns
      */
     private function initializePatterns(): void
     {
-        $this->compiledPatterns = [
-            'php_file' => '/\.php$/',
-            'route_attribute' => '/#\[Route\s*\(/',
-            'class_declaration' => '/^\s*(?:final\s+)?(?:readonly\s+)?class\s+([a-zA-Z_][a-zA-Z0-9_]*)/m',
+        $this->patterns = [
+            'php_file' => '/\.php$/i',
+            'route_attribute' => '/#\[Route\s*\(/i',
+            'class_declaration' => '/^\s*(?:final\s+)?(?:readonly\s+)?(?:abstract\s+)?class\s+([a-zA-Z_][a-zA-Z0-9_]*)/m',
             'namespace_declaration' => '/^\s*namespace\s+([a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*)\s*;/m',
-            'dangerous_code' => '/(?:eval|exec|system|shell_exec|base64_decode)\s*\(/i'
+            'dangerous_code' => '/(?:eval|exec|system|shell_exec)\s*\(/i',
+            'route_quick_check' => '/(#\[Route|Route\(|class\s+\w+Action|class\s+\w+Controller)/i'
         ];
     }
 
     /**
-     * Validate discovered class
+     * ✅ OPTIMIZED: Fast class validation with caching
      */
     public function validateClass(string $className): bool
+    {
+        // Check cache first
+        $cacheKey = 'validate_' . $className;
+        if (isset($this->fileCache[$cacheKey])) {
+            return $this->fileCache[$cacheKey];
+        }
+
+        $result = $this->performClassValidation($className);
+        $this->cacheResult($cacheKey, $result);
+
+        return $result;
+    }
+
+    /**
+     * ✅ OPTIMIZED: Streamlined class validation
+     */
+    private function performClassValidation(string $className): bool
     {
         if (!class_exists($className)) {
             return false;
@@ -65,54 +90,52 @@ final class RouteFileScanner
         try {
             $reflection = new ReflectionClass($className);
 
-            // Must be invokable (have __invoke method)
+            // Must be invokable
             if (!$reflection->hasMethod('__invoke')) {
                 return false;
             }
 
-            // Security checks
-            if ($this->hasSecurityRisks($reflection)) {
+            // ✅ Quick security check - only essential
+            if ($this->hasBasicSecurityRisks($reflection)) {
                 return false;
             }
 
             return true;
 
-        } catch (ReflectionException $e) {
-            if ($this->strictMode) {
-                throw $e;
-            }
-            error_log("Reflection error for class {$className}: " . $e->getMessage());
+        } catch (ReflectionException) {
             return false;
         }
     }
 
     /**
-     * Check class for security risks
+     * ✅ OPTIMIZED: Basic security check only
      */
-    private function hasSecurityRisks(ReflectionClass $reflection): bool
+    private function hasBasicSecurityRisks(ReflectionClass $reflection): bool
     {
-        // Check for dangerous methods
-        $dangerousMethods = [
-            'exec', 'system', 'shell_exec', 'passthru', 'eval',
-            'file_get_contents', 'file_put_contents', 'fopen'
-        ];
+        // Only check for the most dangerous methods
+        $dangerousMethods = ['eval', 'exec', 'system', 'shell_exec'];
 
-        $methods = $reflection->getMethods(ReflectionMethod::IS_PUBLIC);
-        foreach ($methods as $method) {
-            if (in_array($method->getName(), $dangerousMethods, true)) {
-                return true;
-            }
-        }
-
-        // Check dangerous interfaces
-        $dangerousInterfaces = ['Serializable'];
-        foreach ($dangerousInterfaces as $interface) {
-            if ($reflection->implementsInterface($interface)) {
+        foreach ($dangerousMethods as $dangerous) {
+            if ($reflection->hasMethod($dangerous)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * ✅ OPTIMIZED: LRU cache with size limits
+     */
+    private function cacheResult(string $key, mixed $value): void
+    {
+        // Simple LRU for file cache
+        if (count($this->fileCache) >= self::MAX_CACHE_SIZE) {
+            $oldestKey = array_key_first($this->fileCache);
+            unset($this->fileCache[$oldestKey]);
+        }
+
+        $this->fileCache[$key] = $value;
     }
 
     /**
@@ -125,103 +148,81 @@ final class RouteFileScanner
             'cache_hits' => $this->cacheHits,
             'cache_hit_ratio' => $this->cacheHitRatio,
             'cached_files' => count($this->fileCache),
+            'cached_content' => count($this->contentCache),
             'max_file_size' => $this->maxFileSize,
             'strict_mode' => $this->strictMode,
-            'memory_usage' => memory_get_usage(true),
         ];
     }
 
     /**
-     * Clear file cache
+     * Clear all caches
      */
     public function clearCache(): void
     {
         $this->fileCache = [];
+        $this->contentCache = [];
         $this->cacheHits = 0;
         $this->totalFiles = 0;
     }
 
     /**
-     * Get cache efficiency metrics
-     */
-    public function getCacheEfficiency(): array
-    {
-        return [
-            'cache_size' => count($this->fileCache),
-            'hit_ratio' => $this->cacheHitRatio,
-            'memory_per_file' => count($this->fileCache) > 0
-                ? memory_get_usage(true) / count($this->fileCache)
-                : 0,
-        ];
-    }
-
-    /**
-     * Check if specific file has route attributes
+     * ✅ OPTIMIZED: Fast route detection
      */
     public function fileHasRoutes(string $filePath): bool
     {
-        if (!$this->isValidPhpFile($filePath)) {
-            return false;
-        }
-
-        $content = $this->readFileSecurely($filePath);
+        $content = $this->readFileWithCache($filePath);
         return $content !== null && $this->hasRouteAttributes($content);
     }
 
     /**
-     * Validate PHP file
+     * ✅ OPTIMIZED: Content caching for file reads
      */
-    private function isValidPhpFile(string $filePath): bool
+    private function readFileWithCache(string $filePath): ?string
     {
-        if (!file_exists($filePath) || !is_readable($filePath)) {
-            return false;
+        $cacheKey = 'content_' . md5($filePath);
+        $mtime = filemtime($filePath);
+
+        // Check content cache
+        if (isset($this->contentCache[$cacheKey])) {
+            $cached = $this->contentCache[$cacheKey];
+            if ($cached['mtime'] === $mtime) {
+                return $cached['content'];
+            }
         }
 
-        // Extension check
-        if (!preg_match($this->compiledPatterns['php_file'], $filePath)) {
-            return false;
+        $content = $this->readFileSecurely($filePath);
+
+        if ($content !== null && count($this->contentCache) < self::MAX_CONTENT_CACHE) {
+            $this->contentCache[$cacheKey] = [
+                'content' => $content,
+                'mtime' => $mtime
+            ];
         }
 
-        // Size check
-        $size = filesize($filePath);
-        if ($size === false || $size > $this->maxFileSize || $size === 0) {
-            return false;
-        }
-
-        // Security checks for filename
-        $filename = basename($filePath);
-        if (str_starts_with($filename, '.') ||
-            str_starts_with($filename, '_') ||
-            preg_match('/\.(bak|tmp|old|orig)\.php$/', $filename)) {
-            return false;
-        }
-
-        return true;
+        return $content;
     }
 
     /**
-     * Read file content securely
+     * ✅ OPTIMIZED: Minimal secure file reading
      */
     private function readFileSecurely(string $filePath): ?string
     {
-        // Security validation
-        $realPath = realpath($filePath);
-        if ($realPath === false) {
+        if (!$this->isValidPhpFile($filePath)) {
             return null;
         }
 
-        // Prevent directory traversal
-        if (str_contains($realPath, '..') || str_contains($realPath, "\0")) {
-            return null;
-        }
-
-        $content = file_get_contents($realPath);
+        $content = file_get_contents($filePath);
         if ($content === false) {
             return null;
         }
 
-        // Validate PHP content
-        if (!$this->isValidPhpContent($content)) {
+        // Basic validation only
+        if (!str_starts_with(trim($content), '<?php')) {
+            return null;
+        }
+
+        // ✅ Only check for dangerous code in strict mode
+        if ($this->strictMode && preg_match($this->patterns['dangerous_code'], $content)) {
             return null;
         }
 
@@ -229,139 +230,126 @@ final class RouteFileScanner
     }
 
     /**
-     * Validate PHP file content
+     * ✅ OPTIMIZED: Fast file validation
      */
-    private function isValidPhpContent(string $content): bool
+    private function isValidPhpFile(string $filePath): bool
     {
-        $trimmed = trim($content);
-
-        // Must start with PHP tag
-        if (!str_starts_with($trimmed, '<?php')) {
+        if (!file_exists($filePath) || !is_readable($filePath)) {
             return false;
         }
 
-        // Check for dangerous code patterns
-        if (preg_match($this->compiledPatterns['dangerous_code'], $content)) {
-            if ($this->strictMode) {
-                return false;
-            }
-            error_log("Warning: Potentially dangerous code found in file");
+        // Fast extension and size check
+        if (!preg_match($this->patterns['php_file'], $filePath)) {
+            return false;
         }
 
-        return true;
+        $size = filesize($filePath);
+        if ($size === false || $size === 0 || $size > $this->maxFileSize) {
+            return false;
+        }
+
+        // Fast filename check
+        $filename = basename($filePath);
+        return !str_starts_with($filename, '.') && !str_starts_with($filename, '_');
     }
 
     /**
-     * Fast check for route attributes
+     * ✅ OPTIMIZED: Super fast route attribute detection
      */
     private function hasRouteAttributes(string $content): bool
     {
-        // Multiple fast checks for better performance
-        return str_contains($content, '#[Route') ||
-            str_contains($content, 'Route(') ||
-            preg_match($this->compiledPatterns['route_attribute'], $content) === 1;
+        // ✅ Ultra-fast pre-check
+        if (!str_contains($content, 'Route') || !str_contains($content, '#[')) {
+            return false;
+        }
+
+        // ✅ Quick pattern match
+        return preg_match($this->patterns['route_quick_check'], $content) === 1;
     }
 
     /**
-     * Batch scan multiple files
+     * ✅ OPTIMIZED: Batch file scanning
      */
     public function scanFiles(array $filePaths): array
     {
         $allClasses = [];
 
-        foreach ($filePaths as $filePath) {
-            $classes = $this->scanFile($filePath);
-            $allClasses = array_merge($allClasses, $classes);
+        // Process in batches for better memory management
+        $batches = array_chunk($filePaths, 20);
+
+        foreach ($batches as $batch) {
+            foreach ($batch as $filePath) {
+                $classes = $this->scanFile($filePath);
+                $allClasses = array_merge($allClasses, $classes);
+            }
+
+            // Cleanup memory periodically
+            if (count($allClasses) > 100) {
+                gc_collect_cycles();
+            }
         }
 
         return array_unique($allClasses);
     }
 
     /**
-     * Scan single file for route classes
+     * ✅ OPTIMIZED: Smart file scanning with caching
      */
     public function scanFile(string $filePath): array
     {
         $this->totalFiles++;
 
-        if (!$this->isValidPhpFile($filePath)) {
-            return [];
-        }
-
-        $cacheKey = $this->generateCacheKey($filePath);
+        $cacheKey = 'scan_' . md5($filePath);
+        $mtime = filemtime($filePath);
 
         // Check cache first
         if (isset($this->fileCache[$cacheKey])) {
             $cached = $this->fileCache[$cacheKey];
-            if ($this->isCacheValid($filePath, $cached['timestamp'])) {
+            if ($cached['mtime'] === $mtime) {
                 $this->cacheHits++;
                 return $cached['classes'];
             }
         }
 
-        $content = $this->readFileSecurely($filePath);
-        if ($content === null) {
-            $this->cacheResult($cacheKey, []);
-            return [];
-        }
+        $classes = $this->performFileScan($filePath);
 
-        // Fast pre-screening
-        if (!$this->hasRouteAttributes($content)) {
-            $this->cacheResult($cacheKey, []);
-            return [];
-        }
-
-        $classes = $this->extractClassNames($content);
-        $this->cacheResult($cacheKey, $classes, filemtime($filePath));
+        // Cache result
+        $this->cacheResult($cacheKey, [
+            'classes' => $classes,
+            'mtime' => $mtime
+        ]);
 
         return $classes;
     }
 
     /**
-     * Generate cache key for file
+     * ✅ OPTIMIZED: Streamlined file scanning
      */
-    private function generateCacheKey(string $filePath): string
+    private function performFileScan(string $filePath): array
     {
-        $stat = stat($filePath);
-        return hash('xxh3', $filePath . ($stat['mtime'] ?? 0) . ($stat['size'] ?? 0));
-    }
-
-    /**
-     * Check if cache entry is still valid
-     */
-    private function isCacheValid(string $filePath, int $cachedTimestamp): bool
-    {
-        $currentTimestamp = filemtime($filePath);
-        return $currentTimestamp !== false && $currentTimestamp === $cachedTimestamp;
-    }
-
-    /**
-     * Cache scan result
-     */
-    private function cacheResult(string $cacheKey, array $classes, ?int $timestamp = null): void
-    {
-        // Limit cache size to prevent memory issues
-        if (count($this->fileCache) >= 1000) {
-            // Remove oldest entries (simple FIFO)
-            $this->fileCache = array_slice($this->fileCache, 100, null, true);
+        $content = $this->readFileWithCache($filePath);
+        if ($content === null) {
+            return [];
         }
 
-        $this->fileCache[$cacheKey] = [
-            'classes' => $classes,
-            'timestamp' => $timestamp ?? time(),
-        ];
+        // Fast pre-screening
+        if (!$this->hasRouteAttributes($content)) {
+            return [];
+        }
+
+        return $this->extractClassNames($content);
     }
 
     /**
-     * Extract class names from file content
+     * ✅ OPTIMIZED: Fast class name extraction
      */
     private function extractClassNames(string $content): array
     {
         $namespace = $this->extractNamespace($content);
         $classes = [];
 
-        // Extract class declarations
-        if (preg_match_all($this->compiledPatterns['class_declaration'], $content, $matches)) {
+        // Extract class names
+        if (preg_match_all($this->patterns['class_declaration'], $content, $matches)) {
             foreach ($matches[1] as $className) {
                 if ($this->isValidClassName($className)) {
                     $fullClassName = $namespace ? $namespace . '\\' . $className : $className;
@@ -377,11 +365,11 @@ final class RouteFileScanner
     }
 
     /**
-     * Extract namespace from content
+     * ✅ OPTIMIZED: Fast namespace extraction
      */
     private function extractNamespace(string $content): ?string
     {
-        if (preg_match($this->compiledPatterns['namespace_declaration'], $content, $matches)) {
+        if (preg_match($this->patterns['namespace_declaration'], $content, $matches)) {
             $namespace = trim($matches[1]);
             return $this->isValidNamespace($namespace) ? $namespace : null;
         }
@@ -390,7 +378,7 @@ final class RouteFileScanner
     }
 
     /**
-     * Validate namespace
+     * ✅ OPTIMIZED: Quick namespace validation
      */
     private function isValidNamespace(string $namespace): bool
     {
@@ -398,14 +386,8 @@ final class RouteFileScanner
             return false;
         }
 
-        // Check allowed namespace prefixes
-        $allowedPrefixes = [
-            'App\\',
-            'Framework\\',
-            'Modules\\',
-            'Domain\\',
-            'Infrastructure\\'
-        ];
+        // Quick check for allowed prefixes
+        $allowedPrefixes = ['App\\', 'Framework\\', 'Modules\\'];
 
         foreach ($allowedPrefixes as $prefix) {
             if (str_starts_with($namespace, $prefix)) {
@@ -417,61 +399,30 @@ final class RouteFileScanner
     }
 
     /**
-     * Validate class name
+     * ✅ OPTIMIZED: Fast class name validation
      */
     private function isValidClassName(string $className): bool
     {
-        if (strlen($className) > 100) {
-            return false;
-        }
-
-        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $className)) {
-            return false;
-        }
-
-        // Check for reserved words
-        $reserved = ['class', 'interface', 'trait', 'enum', 'function', 'var', 'const'];
-        if (in_array(strtolower($className), $reserved, true)) {
-            return false;
-        }
-
-        return true;
+        return strlen($className) <= 100 &&
+            preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $className) === 1;
     }
 
     /**
-     * Check if class is allowed for route discovery
+     * ✅ OPTIMIZED: Quick class filtering
      */
     private function isAllowedClass(string $fullClassName): bool
     {
-        // Allowed namespaces for route classes
+        // Quick namespace check
         $allowedNamespaces = [
             'App\\Actions\\',
             'App\\Controllers\\',
-            'App\\Http\\Actions\\',
-            'App\\Http\\Controllers\\',
-            'App\\Api\\',
-            'Modules\\'
         ];
 
-        $hasValidNamespace = false;
         foreach ($allowedNamespaces as $namespace) {
             if (str_starts_with($fullClassName, $namespace)) {
-                $hasValidNamespace = true;
-                break;
-            }
-        }
-
-        if (!$hasValidNamespace) {
-            return false;
-        }
-
-        // Check class name suffixes
-        $className = basename(str_replace('\\', '/', $fullClassName));
-        $allowedSuffixes = ['Action', 'Controller', 'Handler'];
-
-        foreach ($allowedSuffixes as $suffix) {
-            if (str_ends_with($className, $suffix)) {
-                return true;
+                // Quick suffix check
+                return str_ends_with($fullClassName, 'Action') ||
+                    str_ends_with($fullClassName, 'Controller');
             }
         }
 
@@ -485,9 +436,9 @@ final class RouteFileScanner
     {
         return [
             'total_files_scanned' => $this->totalFiles,
-            'cache_hits' => $this->cacheHits,
             'cache_hit_ratio' => $this->cacheHitRatio . '%',
             'cached_files' => count($this->fileCache),
+            'cached_content' => count($this->contentCache),
             'max_file_size' => $this->formatBytes($this->maxFileSize),
             'strict_mode' => $this->strictMode,
         ];
@@ -498,7 +449,7 @@ final class RouteFileScanner
      */
     private function formatBytes(int $bytes): string
     {
-        $units = ['B', 'KB', 'MB', 'GB'];
+        $units = ['B', 'KB', 'MB'];
         $unitIndex = 0;
 
         while ($bytes >= 1024 && $unitIndex < count($units) - 1) {

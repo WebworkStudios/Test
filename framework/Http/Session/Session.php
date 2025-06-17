@@ -110,11 +110,16 @@ class Session implements SessionInterface
         }
 
         $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
-        $this->validateFingerprint();
 
-        if ($this->config['validate_ip'] ?? false) {
-            $this->validateIpAddress();
+        if (!isset($_SESSION[self::SESSION_PREFIX . 'fingerprint'])) {
+            $_SESSION[self::SESSION_PREFIX . 'fingerprint'] = hash('sha256',
+                ($this->server['HTTP_USER_AGENT'] ?? '') .
+                ($this->server['REMOTE_ADDR'] ?? '') .
+                session_id()
+            );
         }
+
+        $this->validateFingerprint();
     }
 
     /**

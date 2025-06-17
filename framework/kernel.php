@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Framework;
@@ -6,20 +7,22 @@ namespace Framework;
 use Framework\Container\Container;
 use Framework\Http\{Request, Response};
 use framework\Http\Session\Session;
-use Framework\Routing\{Exceptions\MethodNotAllowedException,
+use Framework\Routing\{
+    Exceptions\MethodNotAllowedException,
     Exceptions\RouteNotFoundException,
     RouteDiscovery,
     RouteFileScanner,
-    Router};
+    Router,
+    RouteCacheBuilder
+};
 use Framework\Security\Csrf\CsrfProtection;
 use Throwable;
 
 /**
- * Framework Kernel - Core application orchestrator
+ * Enhanced Kernel with Router Performance Integration
  */
 final class Kernel
 {
-    // Property Hooks for status tracking
     public bool $isBooted {
         get => $this->booted;
     }
@@ -40,7 +43,6 @@ final class Kernel
      */
     private function registerCoreServices(): void
     {
-        // Self-register kernel
         $this->container->instance(self::class, $this);
         $this->container->instance(Kernel::class, $this);
 
@@ -52,26 +54,44 @@ final class Kernel
             return new CsrfProtection($c->get(Session::class));
         });
 
-        // Register router with auto-discovery
+        // ✅ ENHANCED: Register optimized router
         $this->container->singleton(Router::class, function (Container $c) {
-            // ✅ Router OHNE Discovery erstellen - Discovery separat hinzufügen
-            $router = new Router(
-                container: $c,
-                cache: null,
-                discovery: null, // ⚠️ Nicht hier - verhindert zirkuläre Dependencies
-                debugMode: $this->config['debug'] ?? false,
-                strictMode: $this->config['routing']['strict'] ?? true
-            );
+            $router = $this->createOptimizedRouter($c);
 
-            // ✅ Auto-Discovery NACH Router-Erstellung
-            if (($this->config['routing']['auto_discover'] ?? true)) {
+            // ✅ Auto-discover routes if enabled
+            if ($this->config['routing']['auto_discover'] ?? true) {
                 $this->performRouteDiscovery($router);
+            }
+
+            // ✅ Build cache for production
+            if (!($this->config['debug'] ?? false)) {
+                $this->ensureRouteCache($router);
             }
 
             return $router;
         });
     }
 
+    /**
+     * Create optimized router with proper configuration
+     */
+    private function createOptimizedRouter(Container $container): Router
+    {
+        $routingConfig = $this->config['routing'] ?? [];
+
+        return Router::create($container, [
+            'debug' => $this->config['debug'] ?? false,
+            'strict' => $routingConfig['strict'] ?? true,
+            'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
+            'cache' => $routingConfig['cache'] ?? [],
+            'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+            'base_domain' => $this->config['app']['domain'] ?? 'localhost'
+        ]);
+    }
+
+    /**
+     * Enhanced route discovery with error handling
+     */
     private function performRouteDiscovery(Router $router): void
     {
         $directories = $this->config['routing']['discovery_paths'] ?? [
@@ -79,29 +99,22 @@ final class Kernel
             'app/Controllers'
         ];
 
-        $normalizedDirs = [];
-        foreach ($directories as $dir) {
-            if (is_string($dir)) {
-                $realPath = realpath($dir);
-                if ($realPath !== false && is_dir($realPath)) {
-                    $normalizedDirs[] = $realPath;
-                }
+        $existingDirs = array_filter($directories, function($dir) {
+            $realPath = realpath($dir);
+            return $realPath !== false && is_dir($realPath);
+        });
+
+        if (empty($existingDirs)) {
+            if ($this->config['debug'] ?? false) {
+                error_log("⚠️ No valid discovery directories found");
             }
-        }
-
-        // ✅ Debug-Logs entfernen oder nur bei debug=true
-        if ($this->config['debug'] ?? false) {
-            error_log("Looking for routes in: " . implode(', ', $directories));
-            error_log("Existing directories: " . implode(', ', $normalizedDirs));
-        }
-
-        if (empty($normalizedDirs)) {
             return;
         }
 
         try {
             $scanner = new RouteFileScanner([
-                'strict_mode' => false
+                'strict_mode' => false,
+                'max_file_size' => 2097152 // 2MB
             ]);
 
             $discovery = new RouteDiscovery(
@@ -110,11 +123,11 @@ final class Kernel
                 config: ['strict_mode' => false]
             );
 
-            $discovery->discover($normalizedDirs);
+            $discovery->discover($existingDirs);
 
             if ($this->config['debug'] ?? false) {
                 $stats = $discovery->getStats();
-                error_log("✅ Discovery completed: {$stats['discovered_routes']} routes in {$stats['processed_files']} files");
+                error_log("✅ Route discovery: {$stats['discovered_routes']} routes in {$stats['processed_files']} files");
             }
 
         } catch (Throwable $e) {
@@ -125,14 +138,40 @@ final class Kernel
     }
 
     /**
-     * Handle incoming HTTP request
+     * Ensure route cache exists for production performance
+     */
+    private function ensureRouteCache(Router $router): void
+    {
+        try {
+            // Check if cache exists and is valid
+            if (!RouteCacheBuilder::validateCache()) {
+                // Build cache for production performance
+                $router->buildCache();
+
+                if ($this->config['debug'] ?? false) {
+                    $stats = RouteCacheBuilder::getCacheStats();
+                    if ($stats) {
+                        error_log("✅ Route cache built: {$stats['routes']['total_routes']} routes");
+                        error_log("📈 Expected speedup: {$stats['performance']['expected_speedup']}");
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("⚠️ Route cache build failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Handle incoming HTTP request with performance optimizations
      */
     public function handle(Request $request): Response
     {
         $this->boot();
 
         try {
-            // Get router and dispatch
+            // ✅ Use optimized router
             $router = $this->container->get(Router::class);
             return $router->dispatch($request);
 
@@ -173,7 +212,7 @@ final class Kernel
     }
 
     /**
-     * Handle exceptions and convert to HTTP responses
+     * Enhanced exception handling with better error responses
      */
     private function handleException(Throwable $e, Request $request): Response
     {
@@ -182,12 +221,17 @@ final class Kernel
             error_log("Kernel exception: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
         }
 
-        // Return appropriate HTTP response
+        // Return appropriate HTTP response based on exception type
         return match (true) {
             $e instanceof RouteNotFoundException =>
             Response::notFound('Route not found'),
+
             $e instanceof MethodNotAllowedException =>
-            Response::json(['error' => 'Method not allowed'], 405),
+            Response::json([
+                'error' => 'Method not allowed',
+                'allowed_methods' => $e->getAllowedMethods()
+            ], 405),
+
             default => Response::serverError(
                 ($this->config['debug'] ?? false) ? $e->getMessage() : 'Internal server error'
             )
@@ -220,6 +264,77 @@ final class Kernel
     }
 
     /**
+     * Get framework performance statistics
+     */
+    public function getPerformanceStats(): array
+    {
+        $stats = [
+            'kernel' => [
+                'is_booted' => $this->booted,
+                'providers_count' => count($this->providers),
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true)
+            ]
+        ];
+
+        // Add router stats if available
+        try {
+            $router = $this->container->get(Router::class);
+            $stats['router'] = $router->getStats();
+        } catch (Throwable) {
+            $stats['router'] = ['error' => 'Router not available'];
+        }
+
+        // Add cache stats if available
+        $cacheStats = RouteCacheBuilder::getCacheStats();
+        if ($cacheStats) {
+            $stats['route_cache'] = $cacheStats;
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Warm up all framework caches
+     */
+    public function warmUp(): void
+    {
+        try {
+            // Warm up router
+            $router = $this->container->get(Router::class);
+            $router->warmUp();
+
+            if ($this->config['debug'] ?? false) {
+                error_log("✅ Framework warm-up completed");
+            }
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("❌ Framework warm-up failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Clear all framework caches
+     */
+    public function clearCaches(): void
+    {
+        try {
+            // Clear router caches
+            $router = $this->container->get(Router::class);
+            $router->clearCaches();
+
+            if ($this->config['debug'] ?? false) {
+                error_log("✅ Framework caches cleared");
+            }
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("❌ Cache clearing failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
      * Terminate the kernel
      */
     public function terminate(): void
@@ -232,30 +347,5 @@ final class Kernel
         }
 
         $this->booted = false;
-    }
-
-    /**
-     * Auto-discover routes in default directories
-     */
-    private function discoverRoutes(Router $router): void
-    {
-        $directories = $this->config['routing']['discovery_paths'] ?? [
-            'app/Actions',
-            'app/Controllers'
-        ];
-
-        $existingDirs = array_filter($directories, 'is_dir');
-        if (empty($existingDirs)) {
-            return;
-        }
-
-        try {
-            $discovery = RouteDiscovery::create($router);
-            $discovery->discover($existingDirs);
-        } catch (Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("Route discovery failed: " . $e->getMessage());
-            }
-        }
     }
 }

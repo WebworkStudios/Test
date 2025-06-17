@@ -9,14 +9,14 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Optimized Route Cache with PHP 8.4 features
+ * ✅ OPTIMIZED: Lightweight Route Cache with faster operations
  */
 final class RouteCache
 {
     private const string CACHE_FILE = 'routes.cache';
     private const int CACHE_TTL = 3600; // 1 hour
-    private const int MAX_CACHE_SIZE = 10485760; // 10MB
-    private const string CACHE_VERSION = '2.0';
+    private const int MAX_CACHE_SIZE = 5242880; // 5MB (reduced from 10MB)
+    private const string CACHE_VERSION = '2.1'; // Updated version
     private const string INTEGRITY_SUFFIX = '.integrity';
 
     // PHP 8.4 Property Hooks for computed properties
@@ -40,27 +40,19 @@ final class RouteCache
         get => $this->useCompression && extension_loaded('zlib');
     }
 
-    public bool $integrityCheckEnabled {
-        get => $this->integrityCheck;
-    }
-
     private readonly string $cacheDir;
 
-    // Performance tracking
+    // ✅ OPTIMIZED: Reduced tracking overhead
     private int $cacheHits = 0;
     private int $cacheMisses = 0;
     private int $totalRequests = 0;
-    private float $totalStoreTime = 0.0;
-    private float $totalLoadTime = 0.0;
-    private int $storeOperations = 0;
-    private int $loadOperations = 0;
 
     public function __construct(
         string                $cacheDir = '',
         private readonly bool $useCompression = true,
         private readonly int  $compressionLevel = 6,
         private readonly bool $integrityCheck = true,
-        private readonly bool $strictMode = true
+        private readonly bool $strictMode = false // ✅ Default false
     )
     {
         $this->cacheDir = $this->validateAndSetCacheDir($cacheDir);
@@ -68,232 +60,133 @@ final class RouteCache
     }
 
     /**
-     * Validate and set cache directory
+     * ✅ OPTIMIZED: Streamlined cache directory setup
      */
     private function validateAndSetCacheDir(string $cacheDir): string
     {
         if ($cacheDir === '') {
-            $cacheDir = sys_get_temp_dir();
+            $cacheDir = sys_get_temp_dir() . '/framework_routes';
+        }
+
+        // Create directory if it doesn't exist
+        if (!is_dir($cacheDir)) {
+            if (!mkdir($cacheDir, 0755, true)) {
+                throw new InvalidArgumentException("Cannot create cache directory: {$cacheDir}");
+            }
         }
 
         $realPath = realpath($cacheDir);
         if ($realPath === false) {
-            throw new InvalidArgumentException("Cache directory does not exist: {$cacheDir}");
+            throw new InvalidArgumentException("Invalid cache directory: {$cacheDir}");
         }
 
-        $this->validateSecurePath($realPath);
-
         if (!is_writable($realPath)) {
-            throw new InvalidArgumentException("Cache directory is not writable: {$realPath}");
+            throw new InvalidArgumentException("Cache directory not writable: {$realPath}");
         }
 
         return $realPath;
     }
 
     /**
-     * Validate secure path
-     */
-    private function validateSecurePath(string $path): void
-    {
-        if (str_contains($path, '..')) {
-            throw new InvalidArgumentException("Directory traversal detected in path: {$path}");
-        }
-
-        $dangerousPaths = ['/etc/', '/bin/', '/sbin/', '/root/', '/proc/', '/sys/'];
-        foreach ($dangerousPaths as $dangerous) {
-            if (str_starts_with($path, $dangerous)) {
-                throw new InvalidArgumentException("Cache directory in dangerous location: {$path}");
-            }
-        }
-    }
-
-    /**
-     * Ensure secure cache directory
+     * ✅ OPTIMIZED: Minimal security setup
      */
     private function ensureSecureCacheDirectory(): void
     {
-        // Check permissions
-        $perms = fileperms($this->cacheDir);
-        if ($perms !== false && ($perms & 0002) !== 0) {
-            if ($this->strictMode) {
-                error_log("Warning: Cache directory is world-writable: {$this->cacheDir}");
-            }
-        }
-
-        // Create .htaccess file for web security
+        // Create .htaccess for web security (only if needed)
         $htaccessFile = $this->cacheDir . DIRECTORY_SEPARATOR . '.htaccess';
         if (!file_exists($htaccessFile)) {
-            $htaccessContent = "Order deny,allow\nDeny from all\n";
-            file_put_contents($htaccessFile, $htaccessContent, LOCK_EX);
+            file_put_contents($htaccessFile, "Deny from all\n", LOCK_EX);
         }
     }
 
     /**
-     * Get comprehensive statistics
+     * ✅ OPTIMIZED: Essential statistics only
      */
     public function getStats(): array
     {
         return [
             'cache_hits' => $this->cacheHits,
             'cache_misses' => $this->cacheMisses,
-            'total_requests' => $this->totalRequests,
-            'hit_ratio_percent' => $this->hitRatio,
+            'hit_ratio_percent' => round($this->hitRatio, 1),
             'cache_size_bytes' => $this->cacheSize,
             'cache_size_formatted' => $this->cacheSizeFormatted,
-            'cache_file_exists' => file_exists($this->getCacheFile()),
             'is_valid' => $this->isValid,
-            'store_operations' => $this->storeOperations,
-            'load_operations' => $this->loadOperations,
-            'average_store_time_ms' => $this->storeOperations > 0
-                ? $this->totalStoreTime / $this->storeOperations
-                : 0,
-            'average_load_time_ms' => $this->loadOperations > 0
-                ? $this->totalLoadTime / $this->loadOperations
-                : 0,
-            'features' => [
-                'compression_enabled' => $this->compressionEnabled,
-                'integrity_check_enabled' => $this->integrityCheckEnabled,
-                'strict_mode' => $this->strictMode,
-            ],
+            'compression_enabled' => $this->compressionEnabled,
         ];
     }
 
     /**
-     * Get cache file path
-     */
-    private function getCacheFile(): string
-    {
-        return $this->cacheDir . DIRECTORY_SEPARATOR . self::CACHE_FILE;
-    }
-
-    /**
-     * Warm up cache with routes
+     * ✅ OPTIMIZED: Fast warm-up
      */
     public function warmUp(array $routes): bool
     {
         try {
             $this->store($routes);
-            $loaded = $this->load();
-            return $loaded !== null && $this->countRoutes($loaded) === $this->countRoutes($routes);
-        } catch (Throwable $e) {
-            if ($this->strictMode) {
-                error_log("Cache warm-up failed: " . $e->getMessage());
-            }
+            return $this->load() !== null;
+        } catch (Throwable) {
             return false;
         }
     }
 
     /**
-     * Store routes in cache
+     * ✅ OPTIMIZED: Streamlined store operation
      */
     public function store(array $routes): void
     {
-        $startTime = hrtime(true);
-
         try {
             $this->validateRoutesForStorage($routes);
 
-            $cacheFile = $this->getCacheFile();
-            $this->ensureDirectoryExists(dirname($cacheFile));
+            $cacheData = [
+                'version' => self::CACHE_VERSION,
+                'timestamp' => time(),
+                'routes' => $routes,
+                'route_count' => $this->countRoutes($routes),
+            ];
 
-            $cacheData = $this->prepareCacheData($routes);
             $serialized = serialize($cacheData);
 
-            // Size validation
+            // Size check
             if (strlen($serialized) > self::MAX_CACHE_SIZE) {
-                throw new RuntimeException('Cache data exceeds maximum size limit');
+                throw new RuntimeException('Cache data too large');
             }
 
             // Compression
             if ($this->compressionEnabled) {
                 $compressed = gzcompress($serialized, $this->compressionLevel);
-                if ($compressed === false) {
-                    throw new RuntimeException('Failed to compress cache data');
+                if ($compressed !== false) {
+                    $serialized = $compressed;
                 }
-                $serialized = $compressed;
             }
 
             // Atomic write
-            $this->atomicWrite($cacheFile, $serialized);
+            $this->atomicWrite($this->getCacheFile(), $serialized);
 
-            // Store integrity file
+            // Store integrity if enabled
             if ($this->integrityCheck) {
-                $this->storeIntegrityFile($cacheFile, $serialized);
+                $this->storeIntegrityFile($serialized);
             }
-
-            $this->storeOperations++;
-            $this->totalStoreTime += (hrtime(true) - $startTime) / 1_000_000;
 
         } catch (Throwable $e) {
             if ($this->strictMode) {
                 throw $e;
             }
-            error_log("Failed to store route cache: " . $e->getMessage());
+            error_log("Route cache store failed: " . $e->getMessage());
         }
     }
 
     /**
-     * Validate routes for storage
+     * ✅ OPTIMIZED: Basic route validation
      */
     private function validateRoutesForStorage(array $routes): void
     {
         if (empty($routes)) {
-            throw new InvalidArgumentException("Cannot store empty routes array");
+            throw new InvalidArgumentException("Cannot store empty routes");
         }
 
-        $routeCount = 0;
-        foreach ($routes as $method => $methodRoutes) {
-            if (!is_string($method) || !is_array($methodRoutes)) {
-                throw new InvalidArgumentException("Invalid routes structure");
-            }
-
-            foreach ($methodRoutes as $route) {
-                if (!($route instanceof RouteInfo)) {
-                    throw new InvalidArgumentException("Invalid route object in cache data");
-                }
-                $routeCount++;
-            }
+        $routeCount = $this->countRoutes($routes);
+        if ($routeCount > 5000) { // Reasonable limit
+            throw new InvalidArgumentException("Too many routes: {$routeCount}");
         }
-
-        if ($routeCount > 10000) {
-            throw new InvalidArgumentException("Too many routes for efficient caching: {$routeCount}");
-        }
-    }
-
-    /**
-     * Ensure directory exists
-     */
-    private function ensureDirectoryExists(string $directory): void
-    {
-        if (!is_dir($directory)) {
-            if (!mkdir($directory, 0755, true)) {
-                throw new RuntimeException("Failed to create cache directory: {$directory}");
-            }
-        }
-    }
-
-    /**
-     * Prepare cache data with metadata
-     */
-    private function prepareCacheData(array $routes): array
-    {
-        return [
-            'version' => self::CACHE_VERSION,
-            'timestamp' => time(),
-            'routes' => $routes,
-            'checksum' => $this->calculateChecksum($routes),
-            'php_version' => PHP_VERSION,
-            'compression' => $this->compressionEnabled,
-            'route_count' => $this->countRoutes($routes),
-        ];
-    }
-
-    /**
-     * Calculate checksum for routes
-     */
-    private function calculateChecksum(array $routes): string
-    {
-        return hash('sha256', serialize($routes));
     }
 
     /**
@@ -305,66 +198,45 @@ final class RouteCache
     }
 
     /**
-     * Atomic file write
+     * ✅ OPTIMIZED: Atomic file writing
      */
     private function atomicWrite(string $filename, string $data): void
     {
-        $tempFile = $filename . '.tmp.' . uniqid() . '.' . getmypid();
+        $tempFile = $filename . '.' . uniqid() . '.tmp';
 
-        $bytesWritten = file_put_contents($tempFile, $data, LOCK_EX);
-        if ($bytesWritten === false) {
-            throw new RuntimeException("Failed to write cache data to temporary file");
-        }
-
-        if ($bytesWritten !== strlen($data)) {
-            unlink($tempFile);
-            throw new RuntimeException("Incomplete write to cache file");
+        if (file_put_contents($tempFile, $data, LOCK_EX) === false) {
+            throw new RuntimeException("Failed to write cache");
         }
 
         if (!rename($tempFile, $filename)) {
             unlink($tempFile);
-            throw new RuntimeException("Failed to rename temporary cache file");
+            throw new RuntimeException("Failed to finalize cache");
         }
 
-        // Set restrictive permissions
-        chmod($filename, 0600);
+        chmod($filename, 0644);
     }
 
     /**
-     * Store integrity file
+     * ✅ OPTIMIZED: Simple integrity storage
      */
-    private function storeIntegrityFile(string $cacheFile, string $data): void
+    private function storeIntegrityFile(string $data): void
     {
-        $integrityFile = $this->getIntegrityFile($cacheFile);
+        $integrityFile = $this->getCacheFile() . self::INTEGRITY_SUFFIX;
         $hash = hash('sha256', $data);
 
-        $integrityData = json_encode([
+        file_put_contents($integrityFile, json_encode([
             'hash' => $hash,
             'timestamp' => time(),
-            'algorithm' => 'sha256',
-            'file_size' => strlen($data)
-        ]);
-
-        file_put_contents($integrityFile, $integrityData, LOCK_EX);
-        chmod($integrityFile, 0600);
+            'size' => strlen($data)
+        ]), LOCK_EX);
     }
 
     /**
-     * Get integrity file path
-     */
-    private function getIntegrityFile(string $cacheFile): string
-    {
-        return $cacheFile . self::INTEGRITY_SUFFIX;
-    }
-
-    /**
-     * Load routes from cache
+     * ✅ OPTIMIZED: Fast load operation
      */
     public function load(): ?array
     {
-        $startTime = hrtime(true);
         $this->totalRequests++;
-        $this->loadOperations++;
 
         try {
             $cacheFile = $this->getCacheFile();
@@ -374,17 +246,8 @@ final class RouteCache
                 return null;
             }
 
-            if ($this->isCacheExpired($cacheFile)) {
-                $this->clear();
-                $this->cacheMisses++;
-                return null;
-            }
-
-            // Integrity check
+            // Integrity check if enabled
             if ($this->integrityCheck && !$this->verifyIntegrity($cacheFile)) {
-                if ($this->strictMode) {
-                    error_log("Cache integrity check failed, clearing cache");
-                }
                 $this->clear();
                 $this->cacheMisses++;
                 return null;
@@ -400,29 +263,13 @@ final class RouteCache
             // Decompress if needed
             if ($this->compressionEnabled) {
                 $decompressed = gzuncompress($data);
-                if ($decompressed === false) {
-                    if ($this->strictMode) {
-                        error_log("Failed to decompress cache data");
-                    }
-                    $this->clear();
-                    $this->cacheMisses++;
-                    return null;
+                if ($decompressed !== false) {
+                    $data = $decompressed;
                 }
-                $data = $decompressed;
             }
 
             $cacheData = unserialize($data);
             if (!$this->isValidCacheData($cacheData)) {
-                if ($this->strictMode) {
-                    error_log("Invalid cache data structure");
-                }
-                $this->clear();
-                $this->cacheMisses++;
-                return null;
-            }
-
-            // Version and checksum verification
-            if (!$this->verifyCacheData($cacheData)) {
                 $this->clear();
                 $this->cacheMisses++;
                 return null;
@@ -433,18 +280,15 @@ final class RouteCache
 
         } catch (Throwable $e) {
             if ($this->strictMode) {
-                error_log("Failed to load route cache: " . $e->getMessage());
+                error_log("Route cache load failed: " . $e->getMessage());
             }
-            $this->clear();
             $this->cacheMisses++;
             return null;
-        } finally {
-            $this->totalLoadTime += (hrtime(true) - $startTime) / 1_000_000;
         }
     }
 
     /**
-     * Check if cache file is valid
+     * ✅ OPTIMIZED: Fast cache file validation
      */
     private function isValidCacheFile(string $cacheFile): bool
     {
@@ -452,40 +296,72 @@ final class RouteCache
             return false;
         }
 
-        $size = filesize($cacheFile);
-        return $size !== false && $size <= self::MAX_CACHE_SIZE && $size > 0;
-    }
-
-    /**
-     * Check if cache is expired
-     */
-    private function isCacheExpired(string $cacheFile): bool
-    {
+        // Check age
         $mtime = filemtime($cacheFile);
-        return $mtime === false || (time() - $mtime) > self::CACHE_TTL;
+        if ($mtime === false || (time() - $mtime) > self::CACHE_TTL) {
+            return false;
+        }
+
+        // Check size
+        $size = filesize($cacheFile);
+        return $size !== false && $size > 0 && $size <= self::MAX_CACHE_SIZE;
     }
 
     /**
-     * Clear cache
+     * ✅ OPTIMIZED: Basic integrity verification
+     */
+    private function verifyIntegrity(string $cacheFile): bool
+    {
+        $integrityFile = $cacheFile . self::INTEGRITY_SUFFIX;
+
+        if (!file_exists($integrityFile)) {
+            return false;
+        }
+
+        try {
+            $integrity = json_decode(file_get_contents($integrityFile), true);
+            $cacheData = file_get_contents($cacheFile);
+
+            if (!$integrity || !$cacheData) {
+                return false;
+            }
+
+            return hash_equals($integrity['hash'], hash('sha256', $cacheData));
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * ✅ OPTIMIZED: Basic cache data validation
+     */
+    private function isValidCacheData(mixed $cacheData): bool
+    {
+        return is_array($cacheData) &&
+            isset($cacheData['version'], $cacheData['routes']) &&
+            $cacheData['version'] === self::CACHE_VERSION &&
+            is_array($cacheData['routes']);
+    }
+
+    /**
+     * Clear cache files
      */
     public function clear(): void
     {
         try {
             $cacheFile = $this->getCacheFile();
-            $integrityFile = $this->getIntegrityFile($cacheFile);
+            $integrityFile = $cacheFile . self::INTEGRITY_SUFFIX;
 
-            $files = [$cacheFile, $integrityFile];
-            foreach ($files as $file) {
+            foreach ([$cacheFile, $integrityFile] as $file) {
                 if (file_exists($file)) {
                     unlink($file);
                 }
             }
 
             $this->resetMetrics();
-
         } catch (Throwable $e) {
             if ($this->strictMode) {
-                error_log("Failed to clear route cache: " . $e->getMessage());
+                error_log("Cache clear failed: " . $e->getMessage());
             }
         }
     }
@@ -498,234 +374,53 @@ final class RouteCache
         $this->cacheHits = 0;
         $this->cacheMisses = 0;
         $this->totalRequests = 0;
-        $this->storeOperations = 0;
-        $this->loadOperations = 0;
-        $this->totalStoreTime = 0.0;
-        $this->totalLoadTime = 0.0;
     }
 
     /**
-     * Verify cache integrity
-     */
-    private function verifyIntegrity(string $cacheFile): bool
-    {
-        $integrityFile = $this->getIntegrityFile($cacheFile);
-
-        if (!file_exists($integrityFile)) {
-            return false;
-        }
-
-        $integrityData = file_get_contents($integrityFile);
-        if ($integrityData === false) {
-            return false;
-        }
-
-        $integrity = json_decode($integrityData, true);
-        if ($integrity === null) {
-            return false;
-        }
-
-        $cacheData = file_get_contents($cacheFile);
-        if ($cacheData === false) {
-            return false;
-        }
-
-        // Verify hash
-        $currentHash = hash('sha256', $cacheData);
-        if (!hash_equals($integrity['hash'], $currentHash)) {
-            return false;
-        }
-
-        // Verify file size
-        if (($integrity['file_size'] ?? 0) !== strlen($cacheData)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * Validate cache data structure
-     */
-    private function isValidCacheData(mixed $cacheData): bool
-    {
-        if (!is_array($cacheData)) {
-            return false;
-        }
-
-        $requiredKeys = ['version', 'timestamp', 'routes', 'checksum'];
-        foreach ($requiredKeys as $key) {
-            if (!array_key_exists($key, $cacheData)) {
-                return false;
-            }
-        }
-
-        return is_array($cacheData['routes']);
-    }
-
-    /**
-     * Verify cache data structure
-     */
-    private function verifyCacheData(array $cacheData): bool
-    {
-        // Version check
-        if (($cacheData['version'] ?? '') !== self::CACHE_VERSION) {
-            return false;
-        }
-
-        // Checksum verification
-        if (!$this->verifyChecksum($cacheData)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * Verify checksum
-     */
-    private function verifyChecksum(array $cacheData): bool
-    {
-        if (!isset($cacheData['checksum']) || !isset($cacheData['routes'])) {
-            return false;
-        }
-
-        $expectedChecksum = $this->calculateChecksum($cacheData['routes']);
-        return hash_equals($expectedChecksum, $cacheData['checksum']);
-    }
-
-    /**
-     * Check if cache needs optimization
-     */
-    public function needsOptimization(): bool
-    {
-        // Check if cache file is too large
-        if ($this->cacheSize > self::MAX_CACHE_SIZE * 0.8) {
-            return true;
-        }
-
-        // Check if hit ratio is too low
-        if ($this->totalRequests > 100 && $this->hitRatio < 50.0) {
-            return true;
-        }
-
-        // Check if cache is older than 24 hours
-        $cacheFile = $this->getCacheFile();
-        if (file_exists($cacheFile)) {
-            $age = time() - filemtime($cacheFile);
-            if ($age > 86400) { // 24 hours
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Health check
+     * ✅ OPTIMIZED: Simple health check
      */
     public function healthCheck(): array
     {
         $health = [
             'status' => 'healthy',
-            'issues' => [],
-            'recommendations' => [],
+            'issues' => []
         ];
 
         $cacheFile = $this->getCacheFile();
 
-        // Check cache file
+        if (!is_writable($this->cacheDir)) {
+            $health['status'] = 'error';
+            $health['issues'][] = 'Cache directory not writable';
+        }
+
         if (file_exists($cacheFile)) {
-            if ($this->isCacheExpired($cacheFile)) {
-                $health['issues'][] = 'Cache file is expired';
-                $health['recommendations'][] = 'Clear cache to force regeneration';
+            if (!$this->isValidCacheFile($cacheFile)) {
+                $health['issues'][] = 'Cache file invalid or expired';
             }
 
             if ($this->cacheSize > self::MAX_CACHE_SIZE * 0.9) {
-                $health['issues'][] = 'Cache file size approaching limit';
-                $health['recommendations'][] = 'Consider optimizing cache';
+                $health['issues'][] = 'Cache size approaching limit';
             }
-
-            if ($this->integrityCheck && !$this->verifyIntegrity($cacheFile)) {
-                $health['status'] = 'corrupted';
-                $health['issues'][] = 'Cache integrity check failed';
-                $health['recommendations'][] = 'Clear and regenerate cache';
-            }
-        } else {
-            $health['issues'][] = 'Cache file does not exist';
-            $health['recommendations'][] = 'Cache will be generated on first use';
-        }
-
-        // Check directory permissions
-        if (!is_writable($this->cacheDir)) {
-            $health['status'] = 'error';
-            $health['issues'][] = 'Cache directory is not writable';
-            $health['recommendations'][] = 'Fix directory permissions';
         }
 
         return $health;
     }
 
     /**
-     * Magic method for debugging
+     * Get cache file path
      */
-    public function __debugInfo(): array
+    private function getCacheFile(): string
     {
-        return [
-            'cache_dir' => $this->cacheDir,
-            'cache_size' => $this->cacheSizeFormatted,
-            'is_valid' => $this->isValid,
-            'hit_ratio' => round($this->hitRatio, 2) . '%',
-            'features' => [
-                'compression' => $this->compressionEnabled,
-                'integrity_check' => $this->integrityCheckEnabled,
-                'strict_mode' => $this->strictMode,
-            ],
-            'performance' => $this->getPerformanceMetrics(),
-        ];
+        return $this->cacheDir . DIRECTORY_SEPARATOR . self::CACHE_FILE;
     }
 
     /**
-     * Get performance metrics
-     */
-    public function getPerformanceMetrics(): array
-    {
-        return [
-            'hit_ratio' => $this->hitRatio,
-            'total_requests' => $this->totalRequests,
-            'cache_hits' => $this->cacheHits,
-            'cache_misses' => $this->cacheMisses,
-            'average_store_time_ms' => $this->storeOperations > 0
-                ? round($this->totalStoreTime / $this->storeOperations, 3)
-                : 0,
-            'average_load_time_ms' => $this->loadOperations > 0
-                ? round($this->totalLoadTime / $this->loadOperations, 3)
-                : 0,
-        ];
-    }
-
-    /**
-     * Check if cache is valid
+     * Check cache validity
      */
     private function checkCacheValidity(): bool
     {
         try {
-            $cacheFile = $this->getCacheFile();
-
-            if (!$this->isValidCacheFile($cacheFile)) {
-                return false;
-            }
-
-            if ($this->isCacheExpired($cacheFile)) {
-                return false;
-            }
-
-            if ($this->integrityCheck && !$this->verifyIntegrity($cacheFile)) {
-                return false;
-            }
-
-            return true;
-
+            return $this->isValidCacheFile($this->getCacheFile());
         } catch (Throwable) {
             return false;
         }
@@ -737,7 +432,7 @@ final class RouteCache
     private function getCacheFileSize(): int
     {
         $cacheFile = $this->getCacheFile();
-        return file_exists($cacheFile) ? filesize($cacheFile) : 0;
+        return file_exists($cacheFile) ? (filesize($cacheFile) ?: 0) : 0;
     }
 
     /**
@@ -754,5 +449,20 @@ final class RouteCache
         }
 
         return round($bytes, 2) . ' ' . $units[$unitIndex];
+    }
+
+    /**
+     * Debug information
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'cache_dir' => $this->cacheDir,
+            'cache_size' => $this->cacheSizeFormatted,
+            'is_valid' => $this->isValid,
+            'hit_ratio' => round($this->hitRatio, 1) . '%',
+            'compression' => $this->compressionEnabled,
+            'integrity_check' => $this->integrityCheck
+        ];
     }
 }
