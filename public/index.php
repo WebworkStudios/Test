@@ -15,8 +15,27 @@ if (file_exists($envFile)) {
         if (str_starts_with(trim($line), '#') || !str_contains($line, '=')) {
             continue;
         }
+
         [$key, $value] = explode('=', $line, 2);
-        $_ENV[trim($key)] = trim($value);
+        $key = trim($key);
+        $value = trim($value);
+
+        // ✅ SICHERHEITSVALIDIERUNG für ENV-Keys
+        if (!preg_match('/^[A-Z_][A-Z0-9_]*$/', $key)) {
+            continue; // Überspringe ungültige Keys
+        }
+
+        if (strlen($value) > 1000) {
+            continue; // Überspringe zu lange Werte
+        }
+
+        // ✅ Entferne Quotes falls vorhanden
+        if ((str_starts_with($value, '"') && str_ends_with($value, '"')) ||
+            (str_starts_with($value, "'") && str_ends_with($value, "'"))) {
+            $value = substr($value, 1, -1);
+        }
+
+        $_ENV[$key] = $value;
     }
 }
 
@@ -60,7 +79,9 @@ $config = [
         'lifetime' => (int)env('SESSION_LIFETIME', 7200),
         'secure' => env('SESSION_SECURE', false),
         'httponly' => env('SESSION_HTTPONLY', true),
-        'samesite' => env('SESSION_SAMESITE', 'Lax')
+        'samesite' => env('SESSION_SAMESITE', 'Lax'),
+        'validate_ip' => env('SESSION_VALIDATE_IP', false), // ✅ IP-Validierung optional
+        'environment' => env('APP_ENV', 'development') // ✅ Environment Info
     ],
     'routing' => [
         'debug' => env('ROUTE_DEBUG', true),

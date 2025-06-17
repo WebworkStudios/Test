@@ -12,6 +12,95 @@ use Throwable;
 final class RouteCacheBuilder
 {
     /**
+     * Get cache statistics
+     */
+    public static function getCacheStats(): ?array
+    {
+        $statsFile = __DIR__ . '/../../storage/cache/routes/stats.json';
+
+        if (!file_exists($statsFile)) {
+            return null;
+        }
+
+        $stats = json_decode(file_get_contents($statsFile), true);
+        return is_array($stats) ? $stats : null;
+    }
+
+    /**
+     * Clear all route caches
+     */
+    public static function clearCache(): void
+    {
+        $files = [
+            __DIR__ . '/../../storage/cache/routes/static_map.php',
+            __DIR__ . '/../../storage/cache/routes/stats.json'
+        ];
+
+        foreach ($files as $file) {
+            if (file_exists($file)) {
+                unlink($file);
+            }
+        }
+
+        // Clear OPcache if available
+        if (function_exists('opcache_reset')) {
+            opcache_reset();
+        }
+    }
+
+    /**
+     * Auto-rebuild cache if routes have changed
+     */
+    public static function autoRebuild(Router $router): bool
+    {
+        if (self::validateCache()) {
+            return false; // Cache is valid
+        }
+
+        self::buildFromRouter($router);
+        return true; // Cache was rebuilt
+    }
+
+    /**
+     * Validate cache integrity
+     */
+    public static function validateCache(): bool
+    {
+        $cacheFile = __DIR__ . '/../../storage/cache/routes/static_map.php';
+
+        if (!file_exists($cacheFile)) {
+            return false;
+        }
+
+        try {
+            $cache = require $cacheFile;
+
+            if (!is_array($cache) || !isset($cache['static']) || !isset($cache['dynamic'])) {
+                return false;
+            }
+
+            // Check if cache is recent (less than 24 hours old)
+            $generated = $cache['meta']['generated'] ?? 0;
+            if (time() - $generated > 86400) {
+                return false;
+            }
+
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Build cache from Router instance
+     */
+    public static function buildFromRouter(Router $router): void
+    {
+        $routes = $router->getRoutes();
+        self::buildCache($routes);
+    }
+
+    /**
      * Build static route map from discovered routes
      */
     public static function buildCache(array $routes): void
@@ -171,94 +260,5 @@ final class RouteCacheBuilder
             $staticRatio >= 0.2 => '2-3x faster',
             default => '1.5-2x faster'
         };
-    }
-
-    /**
-     * Validate cache integrity
-     */
-    public static function validateCache(): bool
-    {
-        $cacheFile = __DIR__ . '/../../storage/cache/routes/static_map.php';
-
-        if (!file_exists($cacheFile)) {
-            return false;
-        }
-
-        try {
-            $cache = require $cacheFile;
-
-            if (!is_array($cache) || !isset($cache['static']) || !isset($cache['dynamic'])) {
-                return false;
-            }
-
-            // Check if cache is recent (less than 24 hours old)
-            $generated = $cache['meta']['generated'] ?? 0;
-            if (time() - $generated > 86400) {
-                return false;
-            }
-
-            return true;
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
-    /**
-     * Get cache statistics
-     */
-    public static function getCacheStats(): ?array
-    {
-        $statsFile = __DIR__ . '/../../storage/cache/routes/stats.json';
-
-        if (!file_exists($statsFile)) {
-            return null;
-        }
-
-        $stats = json_decode(file_get_contents($statsFile), true);
-        return is_array($stats) ? $stats : null;
-    }
-
-    /**
-     * Clear all route caches
-     */
-    public static function clearCache(): void
-    {
-        $files = [
-            __DIR__ . '/../../storage/cache/routes/static_map.php',
-            __DIR__ . '/../../storage/cache/routes/stats.json'
-        ];
-
-        foreach ($files as $file) {
-            if (file_exists($file)) {
-                unlink($file);
-            }
-        }
-
-        // Clear OPcache if available
-        if (function_exists('opcache_reset')) {
-            opcache_reset();
-        }
-    }
-
-    /**
-     * Build cache from Router instance
-     */
-    public static function buildFromRouter(Router $router): void
-    {
-        $routes = $router->getRoutes();
-        self::buildCache($routes);
-    }
-
-    /**
-     * Auto-rebuild cache if routes have changed
-     */
-    public static function autoRebuild(Router $router): bool
-    {
-        if (self::validateCache()) {
-            return false; // Cache is valid
-        }
-
-        self::buildFromRouter($router);
-        return true; // Cache was rebuilt
     }
 }

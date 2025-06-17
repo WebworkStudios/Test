@@ -304,13 +304,37 @@ final class Response
      */
     public function withHeader(string $name, string $value): self
     {
+        // ✅ HEADER INJECTION SCHUTZ
+        $sanitizedName = $this->sanitizeHeaderName($name);
+        $sanitizedValue = $this->sanitizeHeaderValue($value);
+
         $newHeaders = Headers::fromArray(
-            [...$this->headers->all(), strtolower($name) => $value]
+            [...$this->headers->all(), strtolower($sanitizedName) => $sanitizedValue]
         );
 
         $response = new self($this->body, $this->status, $newHeaders);
         $response->cookies = $this->cookies;
         return $response;
+    }
+
+
+// ✅ NEUE METHODEN: Header-Sanitization
+    private function sanitizeHeaderName(string $name): string
+    {
+        // Entferne CRLF und andere gefährliche Zeichen
+        $sanitized = preg_replace('/[\r\n\t\0]/', '', $name);
+
+        if (!preg_match('/^[a-zA-Z0-9\-_]+$/', $sanitized)) {
+            throw new InvalidArgumentException('Invalid header name');
+        }
+
+        return $sanitized;
+    }
+
+    private function sanitizeHeaderValue(string $value): string
+    {
+        // Entferne CRLF Injection Versuche
+        return preg_replace('/[\r\n\t\0]/', '', $value);
     }
 
     /**

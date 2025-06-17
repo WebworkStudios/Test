@@ -6,7 +6,6 @@ namespace Framework\Routing;
 
 use ReflectionClass;
 use ReflectionException;
-use ReflectionMethod;
 
 /**
  * ✅ OPTIMIZED: Fast file scanner with intelligent caching
@@ -14,23 +13,21 @@ use ReflectionMethod;
 final class RouteFileScanner
 {
     // PHP 8.4 Property Hooks for computed properties
+private const int MAX_CACHE_SIZE = 500;
+private const int MAX_CONTENT_CACHE = 100;
     public int $maxFileSize {
         get => $this->config['max_file_size'] ?? 1048576; // 1MB (reduced)
     }
 
+    // ✅ OPTIMIZED: Smaller, smarter cache
     public bool $strictMode {
         get => $this->config['strict_mode'] ?? false; // ✅ Default false
     }
-
-    public int $cacheHitRatio {
+        public int $cacheHitRatio {
         get => $this->totalFiles > 0 ? (int)(($this->cacheHits / $this->totalFiles) * 100) : 0;
-    }
-
-    // ✅ OPTIMIZED: Smaller, smarter cache
-    private array $fileCache = [];
-    private array $contentCache = []; // ✅ Cache file contents
-    private const int MAX_CACHE_SIZE = 500; // Reduced from 1000
-    private const int MAX_CONTENT_CACHE = 100; // New content cache
+    } // ✅ Cache file contents
+        private array $fileCache = []; // Reduced from 1000
+    private array $contentCache = []; // New content cache
 
     // Performance tracking
     private int $cacheHits = 0;

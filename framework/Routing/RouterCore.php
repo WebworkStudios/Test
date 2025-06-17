@@ -34,6 +34,20 @@ final class RouterCore
     }
 
     /**
+     * Clear route cache
+     */
+    public static function clearCache(): void
+    {
+        self::$staticRouteMap = null;
+        self::$dynamicRoutes = null;
+
+        $cacheFile = __DIR__ . '/../../storage/cache/routes/static_map.php';
+        if (file_exists($cacheFile)) {
+            unlink($cacheFile);
+        }
+    }
+
+    /**
      * Ultra-fast dispatch - O(1) for static routes
      */
     public function dispatch(Request $request): Response
@@ -99,69 +113,43 @@ final class RouterCore
     }
 
     /**
-     * Handle dynamic routes (with patterns)
-     */
-    private function dispatchDynamic(string $method, string $path, ?string $subdomain, Request $request): Response
-    {
-        if (!isset(self::$dynamicRoutes[$method])) {
-            $this->handleNoMatch($method, $path, $subdomain);
-        }
-
-        foreach (self::$dynamicRoutes[$method] as $route) {
-            // Subdomain check
-            if ($route['subdomain'] !== $subdomain) {
-                continue;
-            }
-
-            // Pattern match
-            if (preg_match($route['pattern'], $path, $matches)) {
-                $params = [];
-
-                // Extract parameters
-                for ($i = 1; $i < count($matches); $i++) {
-                    $paramName = $route['params'][$i - 1] ?? "param{$i}";
-                    $params[$paramName] = $this->sanitizeParameter($matches[$i]);
-                }
-
-                return $this->callAction($route['class'], $request, $params);
-            }
-        }
-
-        $this->handleNoMatch($method, $path, $subdomain);
-    }
-
-    /**
      * Secure path sanitization
      */
     private function sanitizePath(string $path): string
     {
-        // Dangerous patterns - erweitert aus Phase 1
+        // ✅ ERWEITERTE PATH TRAVERSAL PROTECTION
         $dangerous = [
             '../', '..\\', '..../', '...//', '....//',
             '%2e%2e%2f', '%2e%2e%5c', '%2e%2e/',
             '%2E%2E%2F', '%2E%2E%5C', '%2E%2E/',
             "\0", '/./', '/.//', '/../',
-            '%00', '%2F%2E%2E', '%5C%2E%2E'
+            '%00', '%2F%2E%2E', '%5C%2E%2E',
+            // ✅ ZUSÄTZLICHE GEFÄHRLICHE PATTERNS
+            'php://', 'file://', 'data://', 'zip://',
+            '\\.\\', '//\\', '\\/\\', '\\\\',
+            '%5c%5c', '%2f%5c', '%5c%2f'
         ];
 
-        // Recursive cleaning
+        // Mehrfache Bereinigung bis keine Änderungen mehr
         do {
             $before = $path;
-            $path = str_replace($dangerous, '', $path);
+            $path = str_ireplace($dangerous, '', $path);  // Case-insensitive
+            $path = urldecode($path);  // Decode nach jedem Durchgang
         } while ($before !== $path);
 
-        // Windows absolute path check
+        // ✅ ZUSÄTZLICHE VALIDIERUNG
+        if (preg_match('/[^\x20-\x7E]/', $path)) {
+            throw new InvalidArgumentException('Path contains non-printable characters');
+        }
+
         if (preg_match('/^[A-Z]:[\\\\\/]/', $path)) {
             throw new InvalidArgumentException('Absolute file paths not allowed in URL');
         }
 
-        // Normalize
         $cleaned = str_replace('\\', '/', $path);
-
         if (!str_starts_with($cleaned, '/')) {
             $cleaned = '/' . $cleaned;
         }
-
         $cleaned = preg_replace('#/+#', '/', $cleaned);
 
         if (strlen($cleaned) > 2048) {
@@ -217,22 +205,6 @@ final class RouterCore
     }
 
     /**
-     * Sanitize route parameter
-     */
-    private function sanitizeParameter(string $value): string
-    {
-        if (strlen($value) > 255) {
-            throw new InvalidArgumentException("Parameter value too long");
-        }
-
-        if (str_contains($value, "\0")) {
-            throw new InvalidArgumentException("Parameter contains null bytes");
-        }
-
-        return $value;
-    }
-
-    /**
      * Call action class
      */
     private function callAction(string $actionClass, Request $request, array $params): Response
@@ -250,6 +222,38 @@ final class RouterCore
             is_array($result) || is_object($result) => Response::json($result),
             default => Response::html(htmlspecialchars((string)$result, ENT_QUOTES | ENT_HTML5, 'UTF-8'))
         };
+    }
+
+    /**
+     * Handle dynamic routes (with patterns)
+     */
+    private function dispatchDynamic(string $method, string $path, ?string $subdomain, Request $request): Response
+    {
+        if (!isset(self::$dynamicRoutes[$method])) {
+            $this->handleNoMatch($method, $path, $subdomain);
+        }
+
+        foreach (self::$dynamicRoutes[$method] as $route) {
+            // Subdomain check
+            if ($route['subdomain'] !== $subdomain) {
+                continue;
+            }
+
+            // Pattern match
+            if (preg_match($route['pattern'], $path, $matches)) {
+                $params = [];
+
+                // Extract parameters
+                for ($i = 1; $i < count($matches); $i++) {
+                    $paramName = $route['params'][$i - 1] ?? "param{$i}";
+                    $params[$paramName] = $this->sanitizeParameter($matches[$i]);
+                }
+
+                return $this->callAction($route['class'], $request, $params);
+            }
+        }
+
+        $this->handleNoMatch($method, $path, $subdomain);
     }
 
     /**
@@ -290,6 +294,22 @@ final class RouterCore
     }
 
     /**
+     * Sanitize route parameter
+     */
+    private function sanitizeParameter(string $value): string
+    {
+        if (strlen($value) > 255) {
+            throw new InvalidArgumentException("Parameter value too long");
+        }
+
+        if (str_contains($value, "\0")) {
+            throw new InvalidArgumentException("Parameter contains null bytes");
+        }
+
+        return $value;
+    }
+
+    /**
      * Get performance statistics
      */
     public function getStats(): array
@@ -306,19 +326,5 @@ final class RouterCore
             'cached_static_routes' => array_sum(array_map('count', self::$staticRouteMap ?? [])),
             'cached_dynamic_routes' => array_sum(array_map('count', self::$dynamicRoutes ?? [])),
         ];
-    }
-
-    /**
-     * Clear route cache
-     */
-    public static function clearCache(): void
-    {
-        self::$staticRouteMap = null;
-        self::$dynamicRoutes = null;
-
-        $cacheFile = __DIR__ . '/../../storage/cache/routes/static_map.php';
-        if (file_exists($cacheFile)) {
-            unlink($cacheFile);
-        }
     }
 }

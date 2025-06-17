@@ -6,7 +6,8 @@
   "require": {
     "php": ">=8.4.0",
     "ext-json": "*",
-    "ext-mbstring": "*"
+    "ext-mbstring": "*",
+    "ext-fileinfo": "*"
   },
   "suggest": {
     "ext-zlib": "For route cache compression",

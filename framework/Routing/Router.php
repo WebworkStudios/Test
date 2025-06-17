@@ -52,6 +52,56 @@ final class Router
     }
 
     /**
+     * Load cached routes
+     */
+    private function loadCachedRoutes(): void
+    {
+        if ($this->cache === null || $this->debugMode) {
+            return;
+        }
+
+        $cached = $this->cache->load();
+        if ($cached !== null && $this->validateCachedRoutes($cached)) {
+            $this->routes = $cached;
+            $this->rebuildNamedRoutes();
+        }
+    }
+
+    /**
+     * Validate cached routes
+     */
+    private function validateCachedRoutes(array $cached): bool
+    {
+        foreach ($cached as $method => $routes) {
+            if (!is_string($method) || !is_array($routes)) {
+                return false;
+            }
+
+            foreach ($routes as $route) {
+                if (!($route instanceof RouteInfo) || !class_exists($route->actionClass)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Rebuild named routes from cached data
+     */
+    private function rebuildNamedRoutes(): void
+    {
+        $this->namedRoutes = [];
+        foreach ($this->routes as $routes) {
+            foreach ($routes as $route) {
+                if ($route->name !== null) {
+                    $this->namedRoutes[$route->name] = $route;
+                }
+            }
+        }
+    }
+
+    /**
      * Create router with default configuration
      */
     public static function create(ContainerInterface $container, array $config = []): self
@@ -113,30 +163,6 @@ final class Router
         // ✅ Fallback: Original-Methode wenn kein Cache verfügbar
         return $this->dispatchOriginal($request);
     }
-    /**
-     * Check if we have compiled routes available
-     */
-    private function hasCompiledRoutes(): bool
-    {
-        return RouteCacheBuilder::validateCache();
-    }
-
-    /**
-     * Get RouterCore instance (lazy initialization)
-     */
-    private function getCore(): RouterCore
-    {
-        if ($this->core === null) {
-            $this->core = new RouterCore(
-                $this->container,
-                $this->debugMode,
-                $this->allowedSubdomains,
-                $this->baseDomain
-            );
-        }
-
-        return $this->core;
-    }
 
     /**
      * Original dispatch method for debug/development
@@ -164,259 +190,6 @@ final class Router
 
         [$route, $params] = $matchResult;
         return $this->callAction($route->actionClass, $request, $params);
-    }
-
-    /**
-     * Auto-discover routes
-     */
-    public function autoDiscoverRoutes(array $directories = []): void
-    {
-        if ($this->discovery === null) {
-            throw new RuntimeException('RouteDiscovery not configured');
-        }
-
-        if (empty($directories)) {
-            $directories = [
-                'app/Actions',
-                'app/Controllers'
-            ];
-        }
-
-        $existingDirs = array_filter($directories, 'is_dir');
-        if (!empty($existingDirs)) {
-            $this->discovery->discover($existingDirs);
-
-            // ✅ Auto-build cache after discovery
-            $this->buildCache();
-        }
-    }
-
-    /**
-     * Build route cache for production performance
-     */
-    public function buildCache(): void
-    {
-        RouteCacheBuilder::buildFromRouter($this);
-
-        // Clear RouterCore cache to force reload
-        if ($this->core !== null) {
-            RouterCore::clearCache();
-            $this->core = null;
-        }
-    }
-
-    /**
-     * Add route to router
-     */
-    public function addRoute(
-        string  $method,
-        string  $path,
-        string  $actionClass,
-        array   $middleware = [],
-        ?string $name = null,
-        ?string $subdomain = null
-    ): void
-    {
-        $this->validateMiddleware($middleware);
-        $this->validateRouteName($name);
-        $this->validateSubdomain($subdomain);
-
-        // Create route info
-        $routeInfo = RouteInfo::fromPath(
-            strtoupper($method),
-            $path,
-            $actionClass,
-            $middleware,
-            $name,
-            $subdomain
-        );
-
-        // Store route
-        $method = strtoupper($method);
-        $this->routes[$method] ??= [];
-        $this->routes[$method][] = $routeInfo;
-
-        // Store named route
-        if ($name !== null) {
-            if (isset($this->namedRoutes[$name])) {
-                throw new InvalidArgumentException("Route name '{$name}' already exists");
-            }
-            $this->namedRoutes[$name] = $routeInfo;
-        }
-
-        // Reset compilation state
-        $this->routesCompiled = false;
-        $this->cachedRouteCount = null;
-    }
-
-    /**
-     * Generate URL for named route
-     */
-    public function url(string $name, array $params = [], ?string $subdomain = null): string
-    {
-        if (!isset($this->namedRoutes[$name])) {
-            throw new RouteNotFoundException("Named route '{$name}' not found");
-        }
-
-        $route = $this->namedRoutes[$name];
-        $path = $route->originalPath;
-
-        // Replace parameters
-        foreach ($params as $key => $value) {
-            $sanitizedKey = $this->sanitizeParameterKey($key);
-            $sanitizedValue = $this->sanitizeParameterValue($value);
-            $path = str_replace("{{$sanitizedKey}}", $sanitizedValue, $path);
-        }
-
-        // Check for missing parameters
-        if (preg_match('/{[^}]+}/', $path)) {
-            throw new InvalidArgumentException("Missing parameters for route '{$name}'");
-        }
-
-        // Add subdomain if specified
-        $routeSubdomain = $subdomain ?? $route->subdomain;
-        if ($routeSubdomain !== null) {
-            return "//{$routeSubdomain}.{$this->baseDomain}{$path}";
-        }
-
-        return $path;
-    }
-
-    /**
-     * Check if route exists
-     */
-    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
-    {
-        $this->compileRoutes();
-
-        $method = strtoupper($method);
-        $path = $this->sanitizePath($path);
-
-        return $this->findMatchingRoute($method, $path, $subdomain) !== null;
-    }
-
-    /**
-     * Get all registered routes
-     */
-    public function getRoutes(): array
-    {
-        return $this->routes;
-    }
-
-    /**
-     * Get named routes
-     */
-    public function getNamedRoutes(): array
-    {
-        return $this->namedRoutes;
-    }
-
-    /**
-     * Get router statistics including RouterCore stats
-     */
-    public function getStats(): array
-    {
-        $baseStats = [
-            'route_count' => $this->routeCount,
-            'named_routes' => count($this->namedRoutes),
-            'supported_methods' => $this->supportedMethods,
-            'is_compiled' => $this->isCompiled,
-            'cache_available' => $this->hasCompiledRoutes(),
-            'using_core' => !$this->debugMode && $this->hasCompiledRoutes(),
-        ];
-
-        // Add RouterCore stats if available
-        if ($this->core !== null) {
-            $baseStats['core_stats'] = $this->core->getStats();
-        }
-
-        // Add cache stats if available
-        $cacheStats = RouteCacheBuilder::getCacheStats();
-        if ($cacheStats !== null) {
-            $baseStats['cache_stats'] = $cacheStats;
-        }
-
-        return $baseStats;
-    }
-
-    /**
-     * Warm up router caches
-     */
-    public function warmUp(): void
-    {
-        // Build cache if not exists
-        if (!$this->hasCompiledRoutes()) {
-            $this->buildCache();
-        }
-
-        // Pre-initialize RouterCore
-        $this->getCore();
-    }
-
-    /**
-     * Clear all caches
-     */
-    public function clearCaches(): void
-    {
-        $this->cache?->clear();
-        RouteCacheBuilder::clearCache();
-
-        if ($this->core !== null) {
-            RouterCore::clearCache();
-            $this->core = null;
-        }
-    }
-
-    // ===== PRIVATE HELPER METHODS =====
-
-    /**
-     * Load cached routes
-     */
-    private function loadCachedRoutes(): void
-    {
-        if ($this->cache === null || $this->debugMode) {
-            return;
-        }
-
-        $cached = $this->cache->load();
-        if ($cached !== null && $this->validateCachedRoutes($cached)) {
-            $this->routes = $cached;
-            $this->rebuildNamedRoutes();
-        }
-    }
-
-    /**
-     * Validate cached routes
-     */
-    private function validateCachedRoutes(array $cached): bool
-    {
-        foreach ($cached as $method => $routes) {
-            if (!is_string($method) || !is_array($routes)) {
-                return false;
-            }
-
-            foreach ($routes as $route) {
-                if (!($route instanceof RouteInfo) || !class_exists($route->actionClass)) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Rebuild named routes from cached data
-     */
-    private function rebuildNamedRoutes(): void
-    {
-        $this->namedRoutes = [];
-        foreach ($this->routes as $routes) {
-            foreach ($routes as $route) {
-                if ($route->name !== null) {
-                    $this->namedRoutes[$route->name] = $route;
-                }
-            }
-        }
     }
 
     /**
@@ -521,6 +294,12 @@ final class Router
         return $subdomain;
     }
 
+    private function isValidSubdomain(string $subdomain): bool
+    {
+        return strlen($subdomain) <= 63 &&
+            preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
+    }
+
     /**
      * Find matching route
      */
@@ -542,26 +321,6 @@ final class Router
         }
 
         return null;
-    }
-
-    /**
-     * Call action class
-     */
-    private function callAction(string $actionClass, Request $request, array $params): Response
-    {
-        $action = $this->container->get($actionClass);
-
-        if (!is_callable($action)) {
-            throw new RuntimeException("Action {$actionClass} is not callable");
-        }
-
-        $result = $action($request, $params);
-
-        return match (true) {
-            $result instanceof Response => $result,
-            is_array($result) || is_object($result) => Response::json($result),
-            default => Response::html(htmlspecialchars((string)$result, ENT_QUOTES | ENT_HTML5, 'UTF-8'))
-        };
     }
 
     /**
@@ -594,6 +353,136 @@ final class Router
             }
         }
         return $methods;
+    }
+
+    /**
+     * Call action class
+     */
+    private function callAction(string $actionClass, Request $request, array $params): Response
+    {
+        $action = $this->container->get($actionClass);
+
+        if (!is_callable($action)) {
+            throw new RuntimeException("Action {$actionClass} is not callable");
+        }
+
+        $result = $action($request, $params);
+
+        return match (true) {
+            $result instanceof Response => $result,
+            is_array($result) || is_object($result) => Response::json($result),
+            default => Response::html(htmlspecialchars((string)$result, ENT_QUOTES | ENT_HTML5, 'UTF-8'))
+        };
+    }
+
+    // ===== PRIVATE HELPER METHODS =====
+
+    /**
+     * Check if we have compiled routes available
+     */
+    private function hasCompiledRoutes(): bool
+    {
+        return RouteCacheBuilder::validateCache();
+    }
+
+    /**
+     * Get RouterCore instance (lazy initialization)
+     */
+    private function getCore(): RouterCore
+    {
+        if ($this->core === null) {
+            $this->core = new RouterCore(
+                $this->container,
+                $this->debugMode,
+                $this->allowedSubdomains,
+                $this->baseDomain
+            );
+        }
+
+        return $this->core;
+    }
+
+    /**
+     * Auto-discover routes
+     */
+    public function autoDiscoverRoutes(array $directories = []): void
+    {
+        if ($this->discovery === null) {
+            throw new RuntimeException('RouteDiscovery not configured');
+        }
+
+        if (empty($directories)) {
+            $directories = [
+                'app/Actions',
+                'app/Controllers'
+            ];
+        }
+
+        $existingDirs = array_filter($directories, 'is_dir');
+        if (!empty($existingDirs)) {
+            $this->discovery->discover($existingDirs);
+
+            // ✅ Auto-build cache after discovery
+            $this->buildCache();
+        }
+    }
+
+    /**
+     * Build route cache for production performance
+     */
+    public function buildCache(): void
+    {
+        RouteCacheBuilder::buildFromRouter($this);
+
+        // Clear RouterCore cache to force reload
+        if ($this->core !== null) {
+            RouterCore::clearCache();
+            $this->core = null;
+        }
+    }
+
+    /**
+     * Add route to router
+     */
+    public function addRoute(
+        string  $method,
+        string  $path,
+        string  $actionClass,
+        array   $middleware = [],
+        ?string $name = null,
+        ?string $subdomain = null
+    ): void
+    {
+        $this->validateMiddleware($middleware);
+        $this->validateRouteName($name);
+        $this->validateSubdomain($subdomain);
+
+        // Create route info
+        $routeInfo = RouteInfo::fromPath(
+            strtoupper($method),
+            $path,
+            $actionClass,
+            $middleware,
+            $name,
+            $subdomain
+        );
+
+        // Store route
+        $method = strtoupper($method);
+        $this->routes[$method] ??= [];
+        $this->routes[$method][] = $routeInfo;
+
+        // Store named route
+        if ($name !== null) {
+            if (isset($this->namedRoutes[$name])) {
+                throw new InvalidArgumentException("Route name '{$name}' already exists");
+            }
+            $this->namedRoutes[$name] = $routeInfo;
+        }
+
+        // Reset compilation state
+        $this->routesCompiled = false;
+        $this->cachedRouteCount = null;
     }
 
     /**
@@ -630,10 +519,37 @@ final class Router
         }
     }
 
-    private function isValidSubdomain(string $subdomain): bool
+    /**
+     * Generate URL for named route
+     */
+    public function url(string $name, array $params = [], ?string $subdomain = null): string
     {
-        return strlen($subdomain) <= 63 &&
-            preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$/', $subdomain) === 1;
+        if (!isset($this->namedRoutes[$name])) {
+            throw new RouteNotFoundException("Named route '{$name}' not found");
+        }
+
+        $route = $this->namedRoutes[$name];
+        $path = $route->originalPath;
+
+        // Replace parameters
+        foreach ($params as $key => $value) {
+            $sanitizedKey = $this->sanitizeParameterKey($key);
+            $sanitizedValue = $this->sanitizeParameterValue($value);
+            $path = str_replace("{{$sanitizedKey}}", $sanitizedValue, $path);
+        }
+
+        // Check for missing parameters
+        if (preg_match('/{[^}]+}/', $path)) {
+            throw new InvalidArgumentException("Missing parameters for route '{$name}'");
+        }
+
+        // Add subdomain if specified
+        $routeSubdomain = $subdomain ?? $route->subdomain;
+        if ($routeSubdomain !== null) {
+            return "//{$routeSubdomain}.{$this->baseDomain}{$path}";
+        }
+
+        return $path;
     }
 
     private function sanitizeParameterKey(string $key): string
@@ -657,6 +573,91 @@ final class Router
         }
 
         return urlencode($stringValue);
+    }
+
+    /**
+     * Check if route exists
+     */
+    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
+    {
+        $this->compileRoutes();
+
+        $method = strtoupper($method);
+        $path = $this->sanitizePath($path);
+
+        return $this->findMatchingRoute($method, $path, $subdomain) !== null;
+    }
+
+    /**
+     * Get all registered routes
+     */
+    public function getRoutes(): array
+    {
+        return $this->routes;
+    }
+
+    /**
+     * Get named routes
+     */
+    public function getNamedRoutes(): array
+    {
+        return $this->namedRoutes;
+    }
+
+    /**
+     * Get router statistics including RouterCore stats
+     */
+    public function getStats(): array
+    {
+        $baseStats = [
+            'route_count' => $this->routeCount,
+            'named_routes' => count($this->namedRoutes),
+            'supported_methods' => $this->supportedMethods,
+            'is_compiled' => $this->isCompiled,
+            'cache_available' => $this->hasCompiledRoutes(),
+            'using_core' => !$this->debugMode && $this->hasCompiledRoutes(),
+        ];
+
+        // Add RouterCore stats if available
+        if ($this->core !== null) {
+            $baseStats['core_stats'] = $this->core->getStats();
+        }
+
+        // Add cache stats if available
+        $cacheStats = RouteCacheBuilder::getCacheStats();
+        if ($cacheStats !== null) {
+            $baseStats['cache_stats'] = $cacheStats;
+        }
+
+        return $baseStats;
+    }
+
+    /**
+     * Warm up router caches
+     */
+    public function warmUp(): void
+    {
+        // Build cache if not exists
+        if (!$this->hasCompiledRoutes()) {
+            $this->buildCache();
+        }
+
+        // Pre-initialize RouterCore
+        $this->getCore();
+    }
+
+    /**
+     * Clear all caches
+     */
+    public function clearCaches(): void
+    {
+        $this->cache?->clear();
+        RouteCacheBuilder::clearCache();
+
+        if ($this->core !== null) {
+            RouterCore::clearCache();
+            $this->core = null;
+        }
     }
 
     private function calculateRouteCount(): int

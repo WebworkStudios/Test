@@ -103,24 +103,43 @@ class Session implements SessionInterface
     private function validateSession(): void
     {
         $now = time();
-        $lastActivity = $_SESSION[self::SESSION_PREFIX . 'last_activity'] ?? $now;
 
+        // ✅ FIX: Neue Session erkennen und initialisieren
+        if (!isset($_SESSION[self::SESSION_PREFIX . 'last_activity'])) {
+            // Neue Session - initialisiere mit aktueller Zeit
+            $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
+            $_SESSION[self::SESSION_PREFIX . 'created_at'] = $now;
+            return; // Keine weitere Validierung bei neuer Session
+        }
+
+        $lastActivity = $_SESSION[self::SESSION_PREFIX . 'last_activity'];
+
+        // ✅ FIX: Prüfe nur bei bestehenden Sessions auf Expiry
         if ($now - $lastActivity > self::MAX_LIFETIME) {
             $this->destroyWithException('Session expired');
         }
 
+        // Update last activity
         $_SESSION[self::SESSION_PREFIX . 'last_activity'] = $now;
 
+        // ✅ FIX: Fingerprint nur bei bestehenden Sessions validieren
         if (!isset($_SESSION[self::SESSION_PREFIX . 'fingerprint'])) {
             $_SESSION[self::SESSION_PREFIX . 'fingerprint'] = hash('sha256',
-                ($this->server['HTTP_USER_AGENT'] ?? '') .
-                ($this->server['REMOTE_ADDR'] ?? '') .
+                ($_SERVER['HTTP_USER_AGENT'] ?? '') .
+                ($_SERVER['REMOTE_ADDR'] ?? '') .
                 session_id()
             );
+        } else {
+            // Nur validieren wenn Fingerprint bereits existiert
+            $this->validateFingerprint();
+            // IP-Validierung nur in Production aktivieren
+            if (($this->config['validate_ip'] ?? false) === true) {
+                $this->validateIpAddress();
+            }
         }
-
-        $this->validateFingerprint();
     }
+
+// ✅ IP-Validierung aktivieren
 
     /**
      * Destroy session and throw exception
@@ -175,26 +194,42 @@ class Session implements SessionInterface
         $currentUserAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
         $sessionUserAgent = $_SESSION[self::SESSION_PREFIX . 'user_agent'] ?? '';
 
-        match (true) {
-            $sessionUserAgent === '' => $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent,
-            $sessionUserAgent !== $currentUserAgent => $this->destroyWithException('Session hijacking detected'),
-            default => null
-        };
+        if ($sessionUserAgent === '') {
+            // Setze User-Agent wenn noch nicht gesetzt
+            $_SESSION[self::SESSION_PREFIX . 'user_agent'] = $currentUserAgent;
+            return;
+        }
+
+        // ✅ FIX: Weniger strenge Validierung - nur bei komplett anderem User-Agent
+        if ($sessionUserAgent !== $currentUserAgent && strlen($sessionUserAgent) > 0) {
+            // Nur destroyen wenn User-Agent sich komplett geändert hat
+            if (levenshtein($sessionUserAgent, $currentUserAgent) > 50) {
+                $this->destroyWithException('Session hijacking detected');
+            }
+        }
     }
 
-    /**
-     * Validate IP address (optional security feature)
-     */
     private function validateIpAddress(): void
     {
         $currentIp = $_SERVER['REMOTE_ADDR'] ?? '';
         $sessionIp = $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? '';
 
-        match (true) {
-            $sessionIp === '' => $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp,
-            $sessionIp !== $currentIp => $this->destroyWithException('IP address mismatch'),
-            default => null
-        };
+        if ($sessionIp === '') {
+            $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
+            return;
+        }
+
+        // ✅ Weniger streng: Erlaube IP-Wechsel in Development
+        if ($sessionIp !== $currentIp) {
+            $environment = $this->config['environment'] ?? 'development';
+
+            if ($environment === 'production') {
+                $this->destroyWithException('IP address mismatch');
+            } else {
+                // In Development: Update IP statt destroy
+                $_SESSION[self::SESSION_PREFIX . 'ip_address'] = $currentIp;
+            }
+        }
     }
 
     /**

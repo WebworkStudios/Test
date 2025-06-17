@@ -561,10 +561,17 @@ final class Request
     public function file(string $key): ?array
     {
         $files = $this->files();
-        return $files[$key] ?? null;
+        $file = $files[$key] ?? null;
+
+        if ($file === null) {
+            return null;
+        }
+
+        // ✅ NEUE SICHERHEITSVALIDIERUNG
+        return $this->validateUploadedFile($file);
     }
 
-    // === Private Helper Methods ===
+// ✅ NEUE METHODE: Sichere File-Upload-Validierung
 
     public function files(): array
     {
@@ -574,6 +581,43 @@ final class Request
         }
 
         return $this->parsedFiles;
+    }
+
+    // === Private Helper Methods ===
+
+    private function validateUploadedFile(array $file): ?array
+    {
+        // Prüfe Upload-Fehler
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            return null;
+        }
+
+        // Prüfe Dateigröße (max 10MB)
+        if ($file['size'] > 10485760) {
+            throw new InvalidArgumentException('File too large');
+        }
+
+        // Prüfe MIME-Type
+        $allowedMimeTypes = [
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf', 'text/plain', 'text/csv'
+        ];
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+
+        if (!in_array($mimeType, $allowedMimeTypes, true)) {
+            throw new InvalidArgumentException('File type not allowed');
+        }
+
+        // Prüfe Dateiname
+        $filename = basename($file['name']);
+        if (!preg_match('/^[a-zA-Z0-9._-]+$/', $filename)) {
+            throw new InvalidArgumentException('Invalid filename');
+        }
+
+        return $file;
     }
 
     public function cookie(string $name, mixed $default = null): mixed

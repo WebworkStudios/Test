@@ -9,6 +9,7 @@ use Framework\Routing\Attributes\Route;
 use InvalidArgumentException;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
+use RecursiveIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
 use ReflectionException;
@@ -22,31 +23,27 @@ use Throwable;
 final class RouteDiscovery
 {
     // PHP 8.4 Property Hooks for computed properties
+private const int MAX_CACHE_SIZE = 200;
     public int $maxDepth {
         get => $this->config['max_depth'] ?? 10;
     }
-
     public bool $strictMode {
         get => $this->config['strict_mode'] ?? false; // ✅ Default false for better compatibility
     }
-
     public int $processedFiles {
         get => $this->processedFiles;
     }
-
     public int $discoveredRoutes {
         get => $this->discoveredRoutes;
     }
 
+    // ✅ OPTIMIZED: Smaller cache with LRU
     public float $successRate {
         get => $this->processedFiles > 0
             ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
             : 0.0;
     }
-
-    // ✅ OPTIMIZED: Smaller cache with LRU
-    private array $classCache = [];
-    private const int MAX_CACHE_SIZE = 200; // Reduced from unlimited
+        private array $classCache = []; // Reduced from unlimited
 
     public function __construct(
         private readonly Router           $router,
@@ -148,7 +145,7 @@ final class RouteDiscovery
             'app/Controllers'
         ];
 
-        $existingPaths = array_filter($defaultPaths, function($path) {
+        $existingPaths = array_filter($defaultPaths, function ($path) {
             return is_dir($path) && is_readable($path);
         });
 
@@ -508,9 +505,24 @@ final class RouteDiscovery
     }
 
     /**
+     * Magic method for debugging
+     */
+    public function __debugInfo(): array
+    {
+        return [
+            'processed_files' => $this->processedFiles,
+            'discovered_routes' => $this->discoveredRoutes,
+            'cached_classes' => count($this->classCache),
+            'success_rate' => round($this->successRate, 1) . '%',
+            'strict_mode' => $this->strictMode,
+            'max_depth' => $this->maxDepth,
+        ];
+    }
+
+    /**
      * ✅ OPTIMIZED: Simple file filter
      */
-    private function createFileFilter(SplFileInfo $file, string $key, \RecursiveIterator $iterator): bool
+    private function createFileFilter(SplFileInfo $file, string $key, RecursiveIterator $iterator): bool
     {
         $filename = $file->getFilename();
 
@@ -537,20 +549,5 @@ final class RouteDiscovery
     {
         $lowerName = strtolower($dirname);
         return !in_array($lowerName, $this->ignoredDirectories, true);
-    }
-
-    /**
-     * Magic method for debugging
-     */
-    public function __debugInfo(): array
-    {
-        return [
-            'processed_files' => $this->processedFiles,
-            'discovered_routes' => $this->discoveredRoutes,
-            'cached_classes' => count($this->classCache),
-            'success_rate' => round($this->successRate, 1) . '%',
-            'strict_mode' => $this->strictMode,
-            'max_depth' => $this->maxDepth,
-        ];
     }
 }

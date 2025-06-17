@@ -42,12 +42,14 @@ final readonly class CsrfValidator
             return false;
         }
 
-        // Timing-safe comparison
         if (!hash_equals($storedToken, $token)) {
             return false;
         }
 
-        // Check if token was already used (for one-time tokens)
+        if (strlen($token) !== strlen($storedToken) || strlen($token) < 32) {
+            return false;
+        }
+
         if ($oneTime && $this->tokenManager->isUsed($action)) {
             return false;
         }

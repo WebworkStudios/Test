@@ -217,6 +217,14 @@ final class RouteCache
     }
 
     /**
+     * Get cache file path
+     */
+    private function getCacheFile(): string
+    {
+        return $this->cacheDir . DIRECTORY_SEPARATOR . self::CACHE_FILE;
+    }
+
+    /**
      * ✅ OPTIMIZED: Simple integrity storage
      */
     private function storeIntegrityFile(string $data): void
@@ -333,17 +341,6 @@ final class RouteCache
     }
 
     /**
-     * ✅ OPTIMIZED: Basic cache data validation
-     */
-    private function isValidCacheData(mixed $cacheData): bool
-    {
-        return is_array($cacheData) &&
-            isset($cacheData['version'], $cacheData['routes']) &&
-            $cacheData['version'] === self::CACHE_VERSION &&
-            is_array($cacheData['routes']);
-    }
-
-    /**
      * Clear cache files
      */
     public function clear(): void
@@ -377,6 +374,17 @@ final class RouteCache
     }
 
     /**
+     * ✅ OPTIMIZED: Basic cache data validation
+     */
+    private function isValidCacheData(mixed $cacheData): bool
+    {
+        return is_array($cacheData) &&
+            isset($cacheData['version'], $cacheData['routes']) &&
+            $cacheData['version'] === self::CACHE_VERSION &&
+            is_array($cacheData['routes']);
+    }
+
+    /**
      * ✅ OPTIMIZED: Simple health check
      */
     public function healthCheck(): array
@@ -407,11 +415,18 @@ final class RouteCache
     }
 
     /**
-     * Get cache file path
+     * Debug information
      */
-    private function getCacheFile(): string
+    public function __debugInfo(): array
     {
-        return $this->cacheDir . DIRECTORY_SEPARATOR . self::CACHE_FILE;
+        return [
+            'cache_dir' => $this->cacheDir,
+            'cache_size' => $this->cacheSizeFormatted,
+            'is_valid' => $this->isValid,
+            'hit_ratio' => round($this->hitRatio, 1) . '%',
+            'compression' => $this->compressionEnabled,
+            'integrity_check' => $this->integrityCheck
+        ];
     }
 
     /**
@@ -449,20 +464,5 @@ final class RouteCache
         }
 
         return round($bytes, 2) . ' ' . $units[$unitIndex];
-    }
-
-    /**
-     * Debug information
-     */
-    public function __debugInfo(): array
-    {
-        return [
-            'cache_dir' => $this->cacheDir,
-            'cache_size' => $this->cacheSizeFormatted,
-            'is_valid' => $this->isValid,
-            'hit_ratio' => round($this->hitRatio, 1) . '%',
-            'compression' => $this->compressionEnabled,
-            'integrity_check' => $this->integrityCheck
-        ];
     }
 }

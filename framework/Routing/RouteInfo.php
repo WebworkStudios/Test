@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use InvalidArgumentException;
+use Throwable;
 
 /**
  * Optimized Route Information class with caching
@@ -126,7 +127,7 @@ final class RouteInfo
 
         $processedPath = preg_replace_callback(
             '/\{([^}]+)\}/',
-            function($matches) use (&$placeholders, &$placeholderIndex) {
+            function ($matches) use (&$placeholders, &$placeholderIndex) {
                 $param = $matches[1];
                 $placeholder = "PLACEHOLDER_{$placeholderIndex}";
                 $placeholders[$placeholder] = self::getConstraintPattern($param);
@@ -180,9 +181,27 @@ final class RouteInfo
 
         preg_match_all('/\{([^}]+)\}/', $path, $matches);
 
-        return array_map(function($match) {
+        return array_map(function ($match) {
             return str_contains($match, ':') ? explode(':', $match, 2)[0] : $match;
         }, $matches[1]);
+    }
+
+    /**
+     * ✅ OPTIMIZED: Fast cache-friendly creation
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            $data['method'],
+            $data['original_path'],
+            $data['pattern'],
+            $data['param_names'] ?? [],
+            $data['action_class'],
+            $data['middleware'] ?? [],
+            $data['name'] ?? null,
+            $data['subdomain'] ?? null,
+            $data['options'] ?? []
+        );
     }
 
     /**
@@ -208,7 +227,7 @@ final class RouteInfo
         // Dynamic route pattern match with error handling
         try {
             return preg_match($this->pattern, $path) === 1;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             error_log("❌ Regex error in route pattern '{$this->pattern}' for path '{$path}': " . $e->getMessage());
             return false;
         }
@@ -249,7 +268,7 @@ final class RouteInfo
 
             return $params;
 
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             error_log("❌ Parameter extraction error for pattern '{$this->pattern}' and path '{$path}': " . $e->getMessage());
             throw new InvalidArgumentException("Failed to extract parameters: " . $e->getMessage());
         }
@@ -277,24 +296,104 @@ final class RouteInfo
         return $this->cachedConstraints = $constraints;
     }
 
+
+// ✅ NEUE SICHERE VALIDIERUNGSMETHODEN
+
     /**
      * ✅ OPTIMIZED: Fast constraint validation
      */
     private function validateConstraint(string $value, string $constraint): string
     {
+        // ✅ ZUSÄTZLICHE SICHERHEITSVALIDIERUNG
+        if (strlen($value) > 255) {
+            throw new InvalidArgumentException("Parameter too long");
+        }
+
+        if (str_contains($value, "\0") || str_contains($value, "\x00")) {
+            throw new InvalidArgumentException("Parameter contains null bytes");
+        }
+
         return match ($constraint) {
-            'int', 'integer' => is_numeric($value) ? $value :
-                throw new InvalidArgumentException("Parameter must be integer"),
-            'uuid' => preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value) ? $value :
-                throw new InvalidArgumentException("Parameter must be valid UUID"),
-            'slug' => preg_match('/^[a-z0-9-]+$/', $value) ? $value :
-                throw new InvalidArgumentException("Parameter must be valid slug"),
-            'alpha' => preg_match('/^[a-zA-Z]+$/', $value) ? $value :
-                throw new InvalidArgumentException("Parameter must be alphabetic"),
-            'alnum' => preg_match('/^[a-zA-Z0-9]+$/', $value) ? $value :
-                throw new InvalidArgumentException("Parameter must be alphanumeric"),
-            default => $value
+            'int', 'integer' => $this->validateIntegerParam($value),
+            'uuid' => $this->validateUuidParam($value),
+            'slug' => $this->validateSlugParam($value),
+            'alpha' => $this->validateAlphaParam($value),
+            'alnum' => $this->validateAlnumParam($value),
+            default => $this->sanitizeDefaultParam($value)
         };
+    }
+
+    private function validateIntegerParam(string $value): string
+    {
+        if (!preg_match('/^\d+$/', $value) || strlen($value) > 19) {
+            throw new InvalidArgumentException("Invalid integer parameter");
+        }
+        return $value;
+    }
+
+    private function validateUuidParam(string $value): string
+    {
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value)) {
+            throw new InvalidArgumentException("Invalid UUID parameter");
+        }
+        return strtolower($value);
+    }
+
+    // framework/Routing/RouteInfo.php
+
+    private function validateSlugParam(string $value): string
+    {
+        if (!preg_match('/^[a-z0-9-]+$/', $value)) {
+            throw new InvalidArgumentException("Invalid slug parameter");
+        }
+
+        // Zusätzliche Slug-Validierung
+        if (strlen($value) > 100) {
+            throw new InvalidArgumentException("Slug parameter too long");
+        }
+
+        if (str_starts_with($value, '-') || str_ends_with($value, '-')) {
+            throw new InvalidArgumentException("Slug cannot start or end with hyphen");
+        }
+
+        if (str_contains($value, '--')) {
+            throw new InvalidArgumentException("Slug cannot contain consecutive hyphens");
+        }
+
+        return $value;
+    }
+
+    private function validateAlphaParam(string $value): string
+    {
+        if (!preg_match('/^[a-zA-Z]+$/', $value)) {
+            throw new InvalidArgumentException("Invalid alpha parameter");
+        }
+
+        if (strlen($value) > 50) {
+            throw new InvalidArgumentException("Alpha parameter too long");
+        }
+
+        return $value;
+    }
+
+    private function validateAlnumParam(string $value): string
+    {
+        if (!preg_match('/^[a-zA-Z0-9]+$/', $value)) {
+            throw new InvalidArgumentException("Invalid alphanumeric parameter");
+        }
+
+        if (strlen($value) > 50) {
+            throw new InvalidArgumentException("Alphanumeric parameter too long");
+        }
+
+        return $value;
+    }
+
+    private function sanitizeDefaultParam(string $value): string
+    {
+        // Entferne gefährliche Zeichen
+        $sanitized = preg_replace('/[<>"\'\x00-\x1f\x7f-\x9f]/', '', $value);
+        return htmlspecialchars($sanitized, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
     /**
@@ -338,24 +437,6 @@ final class RouteInfo
             'options' => $this->options,
             'is_static' => $this->isStatic
         ];
-    }
-
-    /**
-     * ✅ OPTIMIZED: Fast cache-friendly creation
-     */
-    public static function fromArray(array $data): self
-    {
-        return new self(
-            $data['method'],
-            $data['original_path'],
-            $data['pattern'],
-            $data['param_names'] ?? [],
-            $data['action_class'],
-            $data['middleware'] ?? [],
-            $data['name'] ?? null,
-            $data['subdomain'] ?? null,
-            $data['options'] ?? []
-        );
     }
 
     /**

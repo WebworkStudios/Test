@@ -7,19 +7,16 @@ namespace Framework;
 use Framework\Container\Container;
 use Framework\Http\{Request, Response};
 use framework\Http\Session\Session;
-use Framework\Routing\{
+use Framework\Routing\{Attributes\Route,
     Exceptions\MethodNotAllowedException,
     Exceptions\RouteNotFoundException,
-    RouteDiscovery,
-    RouteFileScanner,
-    Router,
-    RouteCacheBuilder
-};
+    RouteCacheBuilder,
+    Router};
 use Framework\Security\Csrf\CsrfProtection;
-use Throwable;
-use RecursiveIteratorIterator;
 use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use ReflectionClass;
+use Throwable;
 
 /**
  * Enhanced Kernel with Router Performance Integration
@@ -167,18 +164,6 @@ final class Kernel
     }
 
     /**
-     * Boot registered service providers
-     */
-    private function bootProviders(): void
-    {
-        foreach ($this->providers as $provider) {
-            if (method_exists($provider, 'boot')) {
-                $provider->boot();
-            }
-        }
-    }
-
-    /**
      * ✅ NEUE METHODE: Sofortige Route-Discovery mit Duplikat-Schutz
      */
     private function performRouteDiscoveryImmediate(Router $router): void
@@ -311,7 +296,7 @@ final class Kernel
             }
 
             $reflection = new ReflectionClass($fullClassName);
-            $attributes = $reflection->getAttributes(\Framework\Routing\Attributes\Route::class);
+            $attributes = $reflection->getAttributes(Route::class);
 
             if (empty($attributes)) {
                 return 0;
@@ -353,6 +338,18 @@ final class Kernel
         } catch (Throwable $e) {
             error_log("❌ Fehler beim Scannen von {$filePath}: " . $e->getMessage());
             return 0;
+        }
+    }
+
+    /**
+     * Boot registered service providers
+     */
+    private function bootProviders(): void
+    {
+        foreach ($this->providers as $provider) {
+            if (method_exists($provider, 'boot')) {
+                $provider->boot();
+            }
         }
     }
 

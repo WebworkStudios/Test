@@ -6,6 +6,7 @@ declare(strict_types=1);
 namespace Framework\Security\Csrf;
 
 use framework\Http\Session\SessionInterface;
+use RuntimeException;
 
 /**
  * Separate Token-Verwaltung für bessere Kapselung
@@ -28,6 +29,9 @@ final class CsrfTokenManager
      */
     public function generate(string $action): string
     {
+        // ✅ RATE LIMITING für Token-Generierung
+        $this->enforceRateLimit($action);
+
         $this->cleanup();
 
         $token = bin2hex(random_bytes(self::TOKEN_LENGTH));
@@ -36,13 +40,47 @@ final class CsrfTokenManager
         $tokens[$action] = [
             'token' => $token,
             'created_at' => time(),
-            'used' => false
+            'used' => false,
+            'generation_count' => ($tokens[$action]['generation_count'] ?? 0) + 1  // ✅ Counter
         ];
 
         $this->limitTokens($tokens);
         $this->store($tokens);
 
         return $token;
+    }
+
+// ✅ NEUE METHODE: Rate Limiting
+    private function enforceRateLimit(string $action): void
+    {
+        $tokens = $this->getAll();
+
+        if (isset($tokens[$action])) {
+            $lastGeneration = $tokens[$action]['created_at'] ?? 0;
+            $generationCount = $tokens[$action]['generation_count'] ?? 0;
+
+            // Max 5 Token-Generierungen pro Minute
+            if (time() - $lastGeneration < 60 && $generationCount >= 5) {
+                throw new RuntimeException('CSRF token generation rate limit exceeded');
+            }
+        }
+    }
+
+    /**
+     * Get all tokens
+     */
+    public function getAll(): array
+    {
+        return $this->session->get(self::SESSION_KEY, []);
+    }
+
+    /**
+     * Get existing token or null
+     */
+    public function get(string $action): ?string
+    {
+        $tokens = $this->getAll();
+        return $tokens[$action]['token'] ?? null;
     }
 
     /**
@@ -63,23 +101,6 @@ final class CsrfTokenManager
         if ($cleaned) {
             $this->store($tokens);
         }
-    }
-
-    /**
-     * Get all tokens
-     */
-    public function getAll(): array
-    {
-        return $this->session->get(self::SESSION_KEY, []);
-    }
-
-    /**
-     * Get existing token or null
-     */
-    public function get(string $action): ?string
-    {
-        $tokens = $this->getAll();
-        return $tokens[$action]['token'] ?? null;
     }
 
     /**
