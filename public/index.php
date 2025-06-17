@@ -51,8 +51,8 @@ foreach ($directories as $dir) {
 // ✅ Configuration using absolute paths and .env values
 $config = [
     'app' => [
-        'env' => env('APP_ENV', 'production'),
-        'debug' => env('APP_DEBUG', false),
+        'env' => env('APP_ENV', 'development'), // ✅ Auf development setzen
+        'debug' => env('APP_DEBUG', true),
         'url' => env('APP_URL', 'http://localhost'),
     ],
     'session' => [
@@ -63,14 +63,14 @@ $config = [
         'samesite' => env('SESSION_SAMESITE', 'Lax')
     ],
     'routing' => [
-        'debug' => env('ROUTE_DEBUG', false),
+        'debug' => env('ROUTE_DEBUG', true),
         'auto_discover' => true,
         'discovery_paths' => [
-            realpath(__DIR__ . '/../app/Actions') ?: __DIR__ . '/../app/Actions',
-            realpath(__DIR__ . '/../app/Controllers') ?: __DIR__ . '/../app/Controllers'
+            __DIR__ . '/../app/Actions',
+            __DIR__ . '/../app/Controllers'
         ],
-        'cache_dir' => realpath(__DIR__ . '/../storage/cache/routes') ?: __DIR__ . '/../storage/cache/routes',
-        'cache' => env('ROUTE_CACHE', true),
+        'cache_dir' => __DIR__ . '/../storage/cache/routes',
+        'cache' => env('ROUTE_CACHE', false),
         'strict' => false
     ],
     'security' => [

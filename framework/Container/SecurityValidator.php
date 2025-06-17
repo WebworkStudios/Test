@@ -112,11 +112,13 @@ final readonly class SecurityValidator
         return match (true) {
             $reflection->isInternal() => false,
             $this->isActionClass($reflection) => true, // ✅ Action-Klassen sind erlaubt
+            $this->isFrameworkClass($reflection) => true, // ✅ Neue Methode für Framework-Klassen
             $this->hasSecurityRisks($reflection) => false,
             !$this->isClassFileSecure($reflection) => false,
             default => true
         };
     }
+
 
     /**
      * ✅ Neue Methode: Prüft ob es eine Action-Klasse ist
@@ -142,6 +144,29 @@ final readonly class SecurityValidator
 
         return false;
     }
+
+    /**
+     * ✅ Neue Methode: Prüft ob es eine Framework-Klasse ist
+     */
+    private function isFrameworkClass(ReflectionClass $reflection): bool
+    {
+        $className = $reflection->getName();
+
+        // Framework-Klassen sind grundsätzlich erlaubt
+        $frameworkNamespaces = [
+            'Framework\\',
+            'App\\' // App-Namespace ist auch erlaubt
+        ];
+
+        foreach ($frameworkNamespaces as $namespace) {
+            if (str_starts_with($className, $namespace)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     /**
      * Prüft Klasse auf Sicherheitsrisiken

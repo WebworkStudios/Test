@@ -99,16 +99,25 @@ final class Application
         $this->running = true;
 
         try {
+            // ✅ Better error reporting
+            error_log("=== Application::run() START ===");
+
             // Create request from globals
             $request = Request::fromGlobals();
+            error_log("✅ Request created: " . $request->method . " " . $request->path);
 
             // Handle request through kernel
             $response = $this->getKernel()->handle($request);
+            error_log("✅ Response created with status: " . $response->getStatus());
 
             // Send response
             $response->send();
 
         } catch (Throwable $e) {
+            error_log("❌ Fatal application error: " . $e->getMessage());
+            error_log("   File: " . $e->getFile() . ":" . $e->getLine());
+            error_log("   Trace: " . $e->getTraceAsString());
+
             $this->handleFatalError($e);
         } finally {
             $this->terminate();

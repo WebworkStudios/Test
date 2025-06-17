@@ -17,6 +17,9 @@ use Framework\Routing\{
 };
 use Framework\Security\Csrf\CsrfProtection;
 use Throwable;
+use RecursiveIteratorIterator;
+use RecursiveDirectoryIterator;
+use ReflectionClass;
 
 /**
  * Enhanced Kernel with Router Performance Integration
@@ -43,35 +46,46 @@ final class Kernel
      */
     private function registerCoreServices(): void
     {
-        $this->container->instance(self::class, $this);
-        $this->container->instance(Kernel::class, $this);
+        error_log("🔄 Registering core services...");
 
-        // Register session
-        $this->container->singleton(Session::class, fn() => new Session($this->config['session'] ?? []));
+        try {
+            $this->container->instance(self::class, $this);
+            $this->container->instance(Kernel::class, $this);
+            error_log("✅ Kernel instances registered");
 
-        // Register CSRF protection
-        $this->container->singleton(CsrfProtection::class, function (Container $c) {
-            return new CsrfProtection($c->get(Session::class));
-        });
+            // Register session
+            $this->container->singleton(Session::class, fn() => new Session($this->config['session'] ?? []));
+            error_log("✅ Session service registered");
 
-        // ✅ ENHANCED: Register optimized router
-        $this->container->singleton(Router::class, function (Container $c) {
-            $router = $this->createOptimizedRouter($c);
+            // Register CSRF protection
+            $this->container->singleton(CsrfProtection::class, function (Container $c) {
+                return new CsrfProtection($c->get(Session::class));
+            });
+            error_log("✅ CSRF protection registered");
 
-            // ✅ Auto-discover routes if enabled
-            if ($this->config['routing']['auto_discover'] ?? true) {
-                $this->performRouteDiscovery($router);
-            }
+            // ✅ FIXED: Router-Registrierung vereinfachen und sofort Route-Discovery ausführen
+            $this->container->singleton(Router::class, function (Container $c) {
+                error_log("🔄 Creating router...");
+                $router = $this->createOptimizedRouter($c);
+                error_log("✅ Router created");
 
-            // ✅ Build cache for production
-            if (!($this->config['debug'] ?? false)) {
-                $this->ensureRouteCache($router);
-            }
+                // ✅ Route-Discovery sofort hier ausführen, nicht verzögert
+                if ($this->config['routing']['auto_discover'] ?? true) {
+                    error_log("🔄 Starting route discovery...");
+                    $this->performRouteDiscoveryImmediate($router);
+                    error_log("✅ Route discovery completed");
+                }
 
-            return $router;
-        });
+                return $router;
+            });
+            error_log("✅ Router service registered");
+
+        } catch (Throwable $e) {
+            error_log("❌ registerCoreServices() exception: " . $e->getMessage());
+            error_log("   File: " . $e->getFile() . ":" . $e->getLine());
+            throw $e;
+        }
     }
-
     /**
      * Create optimized router with proper configuration
      */
@@ -90,95 +104,200 @@ final class Kernel
     }
 
     /**
-     * Enhanced route discovery with error handling
+     * ✅ NEUE METHODE: Sofortige Route-Discovery
      */
-    private function performRouteDiscovery(Router $router): void
+    private function performRouteDiscoveryImmediate(Router $router): void
     {
         $directories = $this->config['routing']['discovery_paths'] ?? [
-            'app/Actions',
-            'app/Controllers'
+            __DIR__ . '/../app/Actions',
+            __DIR__ . '/../app/Controllers'
         ];
 
-        $existingDirs = array_filter($directories, function($dir) {
+        error_log("🔍 Route-Discovery startet...");
+        error_log("📁 Aktuelles Verzeichnis: " . getcwd());
+
+        // Prüfe ob Verzeichnisse existieren
+        $existingDirs = [];
+        foreach ($directories as $dir) {
             $realPath = realpath($dir);
-            return $realPath !== false && is_dir($realPath);
-        });
+            error_log("🔍 Prüfe Verzeichnis: {$dir} (realpath: " . ($realPath ?: 'false') . ")");
+
+            if ($realPath !== false && is_dir($realPath) && is_readable($realPath)) {
+                $existingDirs[] = $realPath;
+                error_log("✅ Verzeichnis gefunden: {$realPath}");
+
+                // ✅ Zeige Inhalt des Verzeichnisses
+                $files = glob($realPath . '/*.php');
+                error_log("   📄 PHP-Dateien: " . count($files));
+                foreach ($files as $file) {
+                    error_log("     - " . basename($file));
+                }
+            } else {
+                error_log("❌ Verzeichnis nicht zugänglich: {$dir}");
+
+                // ✅ Hilfe bei der Fehlerbehebung
+                if (file_exists($dir)) {
+                    error_log("   ℹ️ Pfad existiert, aber ist " . (is_dir($dir) ? "nicht lesbar" : "kein Verzeichnis"));
+                } else {
+                    error_log("   ℹ️ Pfad existiert nicht");
+                }
+            }
+        }
 
         if (empty($existingDirs)) {
-            if ($this->config['debug'] ?? false) {
-                error_log("⚠️ No valid discovery directories found");
+            error_log("⚠️ Keine gültigen Verzeichnisse für Route-Discovery gefunden!");
+
+            // ✅ Erstelle Verzeichnis falls es nicht existiert
+            foreach ($directories as $dir) {
+                if (!is_dir($dir)) {
+                    error_log("🛠️ Versuche Verzeichnis zu erstellen: {$dir}");
+                    if (mkdir($dir, 0755, true)) {
+                        error_log("✅ Verzeichnis erstellt: {$dir}");
+                    } else {
+                        error_log("❌ Konnte Verzeichnis nicht erstellen: {$dir}");
+                    }
+                }
             }
             return;
         }
 
         try {
-            $scanner = new RouteFileScanner([
-                'strict_mode' => false,
-                'max_file_size' => 2097152 // 2MB
-            ]);
+            // ✅ Vereinfachte Route-Discovery ohne komplexe Scanner
+            foreach ($existingDirs as $dir) {
+                error_log("🔍 Scanne Verzeichnis: {$dir}");
+                $this->scanDirectoryForRoutes($router, $dir);
+            }
 
-            $discovery = new RouteDiscovery(
-                router: $router,
-                scanner: $scanner,
-                config: ['strict_mode' => false]
-            );
+            // Zeige gefundene Routen
+            $routes = $router->getRoutes();
+            $totalRoutes = array_sum(array_map('count', $routes));
+            error_log("📋 Insgesamt {$totalRoutes} Routen registriert");
 
-            $discovery->discover($existingDirs);
-
-            if ($this->config['debug'] ?? false) {
-                $stats = $discovery->getStats();
-                error_log("✅ Route discovery: {$stats['discovered_routes']} routes in {$stats['processed_files']} files");
+            foreach ($routes as $method => $methodRoutes) {
+                error_log("   - {$method}: " . count($methodRoutes) . " Routen");
+                foreach ($methodRoutes as $route) {
+                    error_log("     → {$route->originalPath} -> {$route->actionClass}");
+                }
             }
 
         } catch (Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("❌ Route discovery failed: " . $e->getMessage());
+            error_log("❌ Route-Discovery Fehler: " . $e->getMessage());
+            error_log("   Datei: " . $e->getFile() . ":" . $e->getLine());
+        }
+    }
+
+    /**
+     * ✅ NEUE METHODE: Vereinfachte Verzeichnis-Scanner
+     */
+    private function scanDirectoryForRoutes(Router $router, string $directory): void
+    {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if ($file->getExtension() === 'php' && $file->isFile()) {
+                $this->scanFileForRoutes($router, $file->getPathname());
             }
         }
     }
 
     /**
-     * Ensure route cache exists for production performance
+     * ✅ NEUE METHODE: Vereinfachte Datei-Scanner
      */
-    private function ensureRouteCache(Router $router): void
+    private function scanFileForRoutes(Router $router, string $filePath): void
     {
         try {
-            // Check if cache exists and is valid
-            if (!RouteCacheBuilder::validateCache()) {
-                // Build cache for production performance
-                $router->buildCache();
+            $content = file_get_contents($filePath);
+            if ($content === false || !str_contains($content, '#[Route')) {
+                return;
+            }
 
-                if ($this->config['debug'] ?? false) {
-                    $stats = RouteCacheBuilder::getCacheStats();
-                    if ($stats) {
-                        error_log("✅ Route cache built: {$stats['routes']['total_routes']} routes");
-                        error_log("📈 Expected speedup: {$stats['performance']['expected_speedup']}");
-                    }
-                }
+            // Extrahiere Namespace und Klassennamen
+            $namespace = null;
+            $className = null;
+
+            if (preg_match('/namespace\s+([^;]+);/', $content, $matches)) {
+                $namespace = trim($matches[1]);
             }
+
+            if (preg_match('/class\s+(\w+)/', $content, $matches)) {
+                $className = trim($matches[1]);
+            }
+
+            if (!$namespace || !$className) {
+                return;
+            }
+
+            $fullClassName = $namespace . '\\' . $className;
+
+            // Prüfe ob Klasse existiert
+            if (!class_exists($fullClassName)) {
+                error_log("⚠️ Klasse nicht gefunden: {$fullClassName}");
+                return;
+            }
+
+            $reflection = new ReflectionClass($fullClassName);
+            $attributes = $reflection->getAttributes(\Framework\Routing\Attributes\Route::class);
+
+            if (empty($attributes)) {
+                return;
+            }
+
+            error_log("🎯 Routen gefunden in: {$fullClassName}");
+
+            // Registriere alle Route-Attribute
+            foreach ($attributes as $attribute) {
+                $route = $attribute->newInstance();
+
+                $router->addRoute(
+                    $route->method,
+                    $route->path,
+                    $fullClassName,
+                    $route->middleware,
+                    $route->name,
+                    $route->subdomain
+                );
+
+                error_log("   ✅ Route registriert: {$route->method} {$route->path} -> {$fullClassName}");
+            }
+
         } catch (Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("⚠️ Route cache build failed: " . $e->getMessage());
-            }
+            error_log("❌ Fehler beim Scannen von {$filePath}: " . $e->getMessage());
         }
     }
 
     /**
      * Handle incoming HTTP request with performance optimizations
      */
+
     public function handle(Request $request): Response
     {
-        $this->boot();
+        error_log("=== Kernel::handle() START ===");
+        error_log("Request: " . $request->method . " " . $request->path);
 
         try {
-            // ✅ Use optimized router
+            error_log("🔄 Starting boot process...");
+            $this->boot();
+            error_log("✅ Boot completed");
+
+            error_log("🔄 Getting router from container...");
             $router = $this->container->get(Router::class);
-            return $router->dispatch($request);
+            error_log("✅ Router obtained");
+
+            error_log("🔄 Dispatching request...");
+            $response = $router->dispatch($request);
+            error_log("✅ Dispatch completed");
+
+            return $response;
 
         } catch (Throwable $e) {
+            error_log("❌ Kernel::handle() exception: " . $e->getMessage());
+            error_log("   File: " . $e->getFile() . ":" . $e->getLine());
             return $this->handleException($e, $request);
         }
     }
+
 
     /**
      * Boot the kernel and all services
@@ -186,17 +305,30 @@ final class Kernel
     public function boot(): void
     {
         if ($this->booted) {
+            error_log("ℹ️ Kernel already booted, skipping");
             return;
         }
 
-        // Start session
-        $session = $this->container->get(Session::class);
-        $session->start();
+        try {
+            error_log("🔄 Starting session...");
+            // Start session
+            $session = $this->container->get(Session::class);
+            $session->start();
+            error_log("✅ Session started");
 
-        // Boot service providers
-        $this->bootProviders();
+            error_log("🔄 Booting providers...");
+            // Boot service providers
+            $this->bootProviders();
+            error_log("✅ Providers booted");
 
-        $this->booted = true;
+            $this->booted = true;
+            error_log("✅ Kernel boot completed");
+
+        } catch (Throwable $e) {
+            error_log("❌ Kernel::boot() exception: " . $e->getMessage());
+            error_log("   File: " . $e->getFile() . ":" . $e->getLine());
+            throw $e;
+        }
     }
 
     /**
