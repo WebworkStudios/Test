@@ -43,7 +43,6 @@ final class Router
         private readonly ?RouteCache        $cache = null,
         private readonly ?RouteDiscovery    $discovery = null,
         private readonly bool               $debugMode = false,
-        private readonly bool               $strictMode = true,
         private readonly array              $allowedSubdomains = ['api', 'admin', 'www'],
         private readonly string             $baseDomain = 'localhost'
     )
@@ -52,7 +51,42 @@ final class Router
     }
 
     /**
-     * Load cached routes
+     * Create router with default configuration
+     */
+    public static function create(ContainerInterface $container, array $config = []): self
+    {
+        // Sicherstellen, dass $config['cache'] ein Array ist
+        $cacheConfig = $config['cache'] ?? [];
+        if (!is_array($cacheConfig)) {
+            $cacheConfig = [];
+        }
+
+        $cache = isset($config['cache_dir'])
+            ? new RouteCache($config['cache_dir'], ...$cacheConfig)
+            : null;
+
+        // Sicherstellen, dass $config['discovery'] ein Array ist
+        $discoveryConfig = $config['discovery'] ?? [];
+        if (!is_array($discoveryConfig)) {
+            $discoveryConfig = [];
+        }
+
+        $discovery = isset($config['discovery'])
+            ? RouteDiscovery::create(new self($container), $discoveryConfig)
+            : null;
+
+        return new self(
+            container: $container,
+            cache: $cache,
+            discovery: $discovery,
+            debugMode: $config['debug'] ?? false,
+            allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+            baseDomain: $config['base_domain'] ?? 'localhost'
+        );
+    }
+
+    /**
+     * Load cached routes using RouteCacheBuilder
      */
     private function loadCachedRoutes(): void
     {
@@ -60,30 +94,14 @@ final class Router
             return;
         }
 
-        $cached = $this->cache->load();
-        if ($cached !== null && $this->validateCachedRoutes($cached)) {
-            $this->routes = $cached;
-            $this->rebuildNamedRoutes();
-        }
-    }
-
-    /**
-     * Validate cached routes
-     */
-    private function validateCachedRoutes(array $cached): bool
-    {
-        foreach ($cached as $method => $routes) {
-            if (!is_string($method) || !is_array($routes)) {
-                return false;
-            }
-
-            foreach ($routes as $route) {
-                if (!($route instanceof RouteInfo) || !class_exists($route->actionClass)) {
-                    return false;
-                }
+        // Nutze RouteCacheBuilder statt eigene Logik
+        if (RouteCacheBuilder::validateCache()) {
+            $cached = $this->cache->load();
+            if ($cached !== null) {
+                $this->routes = $cached;
+                $this->rebuildNamedRoutes();
             }
         }
-        return true;
     }
 
     /**
@@ -102,57 +120,21 @@ final class Router
     }
 
     /**
-     * Create router with default configuration
-     */
-    public static function create(ContainerInterface $container, array $config = []): self
-    {
-        // ✅ FIX: Sicherstellen, dass $config['cache'] ein Array ist
-        $cacheConfig = $config['cache'] ?? [];
-        if (!is_array($cacheConfig)) {
-            $cacheConfig = [];
-        }
-
-        $cache = isset($config['cache_dir'])
-            ? new RouteCache($config['cache_dir'], ...$cacheConfig)
-            : null;
-
-        // ✅ FIX: Sicherstellen, dass $config['discovery'] ein Array ist
-        $discoveryConfig = $config['discovery'] ?? [];
-        if (!is_array($discoveryConfig)) {
-            $discoveryConfig = [];
-        }
-
-        $discovery = isset($config['discovery'])
-            ? RouteDiscovery::create(new self($container), $discoveryConfig)
-            : null;
-
-        return new self(
-            container: $container,
-            cache: $cache,
-            discovery: $discovery,
-            debugMode: $config['debug'] ?? false,
-            strictMode: $config['strict'] ?? true,
-            allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
-            baseDomain: $config['base_domain'] ?? 'localhost'
-        );
-    }
-
-    /**
      * High-Performance dispatch - delegates to RouterCore only when safe
      */
     public function dispatch(Request $request): Response
     {
-        // ✅ SICHERSTE LÖSUNG: Im Debug-Modus immer die Original-Methode verwenden
+        // Im Debug-Modus immer die Original-Methode verwenden
         if ($this->debugMode) {
             return $this->dispatchOriginal($request);
         }
 
-        // ✅ Production: RouterCore nur wenn gültiger Cache vorhanden
+        // Production: RouterCore nur wenn gültiger Cache vorhanden
         if ($this->hasCompiledRoutes()) {
             try {
                 return $this->getCore()->dispatch($request);
             } catch (Throwable $e) {
-                // ✅ Fallback bei RouterCore-Fehlern
+                // Fallback bei RouterCore-Fehlern
                 if ($this->debugMode) {
                     error_log("RouterCore failed, falling back to original: " . $e->getMessage());
                 }
@@ -160,7 +142,7 @@ final class Router
             }
         }
 
-        // ✅ Fallback: Original-Methode wenn kein Cache verfügbar
+        // Fallback: Original-Methode wenn kein Cache verfügbar
         return $this->dispatchOriginal($request);
     }
 
@@ -193,21 +175,12 @@ final class Router
     }
 
     /**
-     * Validate request
+     * Validate request using RequestSanitizer
      */
     private function validateRequest(Request $request): void
     {
-        if (strlen($request->path) > 2048) {
-            throw new InvalidArgumentException("Request path too long");
-        }
-
-        if (str_contains($request->path, "\0") || str_contains($request->uri, "\0")) {
-            throw new InvalidArgumentException("Request contains null bytes");
-        }
-
-        if (preg_match('/^[A-Z]:[\\\\\/]/', $request->path)) {
-            throw new InvalidArgumentException("Absolute file paths not allowed in URL");
-        }
+        // Umfassende Validierung durch RequestSanitizer
+        RequestSanitizer::validateRequest($request);
     }
 
     /**
@@ -302,8 +275,6 @@ final class Router
         };
     }
 
-    // ===== PRIVATE HELPER METHODS =====
-
     /**
      * Check if we have compiled routes available
      */
@@ -330,7 +301,7 @@ final class Router
     }
 
     /**
-     * Auto-discover routes
+     * Auto-discover routes - Vereinfacht ohne doppelte Implementierung
      */
     public function autoDiscoverRoutes(array $directories = []): void
     {
@@ -348,17 +319,16 @@ final class Router
         $existingDirs = array_filter($directories, 'is_dir');
         if (!empty($existingDirs)) {
             $this->discovery->discover($existingDirs);
-
-            // ✅ Auto-build cache after discovery
             $this->buildCache();
         }
     }
 
     /**
-     * Build route cache for production performance
+     * Build route cache for production performance - Delegiert an RouteCacheBuilder
      */
     public function buildCache(): void
     {
+        // Delegiere komplett an RouteCacheBuilder
         RouteCacheBuilder::buildFromRouter($this);
 
         // Clear RouterCore cache to force reload
@@ -437,7 +407,6 @@ final class Router
             throw new InvalidArgumentException("Invalid route name: {$name}");
         }
     }
-
 
     /**
      * Generate URL for named route
@@ -553,6 +522,73 @@ final class Router
     }
 
     /**
+     * Debug route matching for development
+     */
+    public function debugRoute(string $method, string $path, ?string $subdomain = null): array
+    {
+        if (!$this->debugMode) {
+            throw new RuntimeException('Debug mode must be enabled for route debugging');
+        }
+
+        $method = strtoupper($method);
+        $sanitizedPath = RequestSanitizer::sanitizePath($path);
+        $extractedSubdomain = RequestSanitizer::extractSubdomain($subdomain ?? 'localhost', $this->allowedSubdomains);
+
+        $debug = [
+            'method' => $method,
+            'original_path' => $path,
+            'sanitized_path' => $sanitizedPath,
+            'subdomain' => $extractedSubdomain,
+            'static_key' => $extractedSubdomain ? "{$extractedSubdomain}:{$sanitizedPath}" : $sanitizedPath,
+            'has_static_match' => false,
+            'dynamic_candidates' => [],
+            'matched_route' => null
+        ];
+
+        // Check for routes in this method
+        if (!isset($this->routes[$method])) {
+            $debug['error'] = "No routes registered for method {$method}";
+            return $debug;
+        }
+
+        // Test each route
+        foreach ($this->routes[$method] as $route) {
+            $routeDebug = [
+                'class' => $route->actionClass,
+                'pattern' => $route->pattern,
+                'original_path' => $route->originalPath,
+                'param_names' => $route->paramNames,
+                'subdomain' => $route->subdomain,
+                'matches' => false,
+                'extracted_params' => []
+            ];
+
+            if ($route->matches($method, $sanitizedPath, $extractedSubdomain)) {
+                $routeDebug['matches'] = true;
+                try {
+                    $routeDebug['extracted_params'] = $route->extractParams($sanitizedPath);
+                    $debug['matched_route'] = [
+                        'type' => $route->isStatic ? 'static' : 'dynamic',
+                        'class' => $route->actionClass,
+                        'path' => $route->originalPath,
+                        'params' => $routeDebug['extracted_params']
+                    ];
+                } catch (InvalidArgumentException $e) {
+                    $routeDebug['error'] = $e->getMessage();
+                }
+            }
+
+            if ($route->isStatic) {
+                $debug['has_static_match'] = $routeDebug['matches'];
+            } else {
+                $debug['dynamic_candidates'][] = $routeDebug;
+            }
+        }
+
+        return $debug;
+    }
+
+    /**
      * Warm up router caches
      */
     public function warmUp(): void
@@ -580,6 +616,9 @@ final class Router
         }
     }
 
+    /**
+     * Calculate total route count
+     */
     private function calculateRouteCount(): int
     {
         return array_sum(array_map('count', $this->routes));

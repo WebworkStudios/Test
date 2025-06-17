@@ -30,7 +30,7 @@ final class RouteInfo
         get => $this->cachedCacheKey ??= hash('xxh3', $this->method . ':' . $this->originalPath . ':' . ($this->subdomain ?? ''));
     }
 
-    // ✅ Performance: Cache computed values
+    // Performance: Cache computed values
     private ?bool $cachedIsStatic = null;
     private ?string $cachedCacheKey = null;
     private ?array $cachedConstraints = null;
@@ -51,7 +51,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Streamlined validation
+     * Streamlined validation
      */
     private function validateConstruction(): void
     {
@@ -70,7 +70,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Fast route creation
+     * Fast route creation
      */
     public static function fromPath(
         string  $method,
@@ -84,7 +84,7 @@ final class RouteInfo
     {
         $method = strtoupper($method);
 
-        // ✅ Cache pattern compilation
+        // Cache pattern compilation
         static $patternCache = [];
         $pathKey = $path;
 
@@ -111,7 +111,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ FINAL FIX: Sichere Pattern-Kompilierung
+     * Sichere Pattern-Kompilierung
      */
     private static function compilePattern(string $path): string
     {
@@ -120,14 +120,14 @@ final class RouteInfo
             return '#^' . preg_quote($path, '#') . '$#';
         }
 
-        // ✅ SICHERSTE LÖSUNG: Schritt-für-Schritt ohne Escape-Konflikte
+        // Sichere Lösung: Schritt-für-Schritt ohne Escape-Konflikte
 
         // Schritt 1: Ersetze Parameter durch eindeutige Platzhalter
         $placeholders = [];
         $placeholderIndex = 0;
 
         $processedPath = preg_replace_callback(
-            '/\{([^}]+)\}/',
+            '/\{([^}]+)}/',
             function ($matches) use (&$placeholders, &$placeholderIndex) {
                 $param = $matches[1];
                 $placeholder = "PLACEHOLDER_{$placeholderIndex}";
@@ -150,7 +150,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Cached constraint patterns
+     * Cached constraint patterns
      */
     private static function getConstraintPattern(string $param): string
     {
@@ -172,7 +172,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Fast parameter extraction
+     * Fast parameter extraction
      */
     private static function extractParameterNames(string $path): array
     {
@@ -180,7 +180,7 @@ final class RouteInfo
             return [];
         }
 
-        preg_match_all('/\{([^}]+)\}/', $path, $matches);
+        preg_match_all('/\{([^}]+)}/', $path, $matches);
 
         return array_map(function ($match) {
             return str_contains($match, ':') ? explode(':', $match, 2)[0] : $match;
@@ -188,7 +188,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Fast cache-friendly creation
+     * Fast cache-friendly creation
      */
     public static function fromArray(array $data): self
     {
@@ -206,7 +206,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ FIX: Sichere matches() Methode mit Fehlerbehandlung
+     * Sichere matches() Methode mit Fehlerbehandlung
      */
     public function matches(string $method, string $path, ?string $subdomain = null): bool
     {
@@ -235,7 +235,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ FIX: Sichere extractParams() mit Fehlerbehandlung
+     * Sichere extractParams() mit Fehlerbehandlung
      */
     public function extractParams(string $path): array
     {
@@ -254,7 +254,7 @@ final class RouteInfo
             foreach ($this->paramNames as $index => $name) {
                 $value = $matches[$index + 1] ?? '';
 
-                // Ersetze alle validateXXXParam Aufrufe:
+                // Nutze RequestSanitizer für konsistente Validierung
                 if (isset($constraints[$name])) {
                     $value = RequestSanitizer::sanitizeParameter($value, $constraints[$name]);
                 } else {
@@ -273,7 +273,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Cached parameter constraints
+     * Cached parameter constraints
      */
     private function getParameterConstraints(): array
     {
@@ -282,7 +282,7 @@ final class RouteInfo
         }
 
         $constraints = [];
-        preg_match_all('/\{([^}]+)\}/', $this->originalPath, $matches);
+        preg_match_all('/\{([^}]+)}/', $this->originalPath, $matches);
 
         foreach ($matches[1] as $match) {
             if (str_contains($match, ':')) {
@@ -295,7 +295,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Fast URL generation
+     * Fast URL generation
      */
     public function generateUrl(array $params = []): string
     {
@@ -306,12 +306,12 @@ final class RouteInfo
         }
 
         foreach ($params as $key => $value) {
-            $pattern = '/\{' . preg_quote($key, '/') . '(?::[^}]+)?\}/';
+            $pattern = '/\{' . preg_quote($key, '/') . '(?::[^}]+)?}/';
             $url = preg_replace($pattern, urlencode((string)$value), $url);
         }
 
         // Check for missing parameters
-        if (preg_match('/\{[^}]+\}/', $url)) {
+        if (preg_match('/\{[^}]+}/', $url)) {
             throw new InvalidArgumentException("Missing required parameters for route");
         }
 
@@ -319,7 +319,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Lightweight serialization for cache
+     * Lightweight serialization for cache
      */
     public function toArray(): array
     {
@@ -337,9 +337,8 @@ final class RouteInfo
         ];
     }
 
-    /**
-     * ✅ Performance helpers
-     */
+    // === Performance helpers ===
+
     public function getPriority(): int
     {
         return $this->options['priority'] ?? 50;
@@ -361,9 +360,8 @@ final class RouteInfo
             in_array('auth', $this->middleware, true);
     }
 
-    /**
-     * ✅ OPTIMIZED: Fast clone operations
-     */
+    // === Fast clone operations ===
+
     public function withMethod(string $method): self
     {
         return new self(
@@ -394,9 +392,8 @@ final class RouteInfo
         );
     }
 
-    /**
-     * ✅ Optimized debugging
-     */
+    // === Debugging ===
+
     public function __debugInfo(): array
     {
         return [

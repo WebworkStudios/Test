@@ -15,19 +15,18 @@ use JsonException;
  */
 final class Request
 {
-    // Lazy-loaded data (computed only when needed)
     private const int MAX_STRING_LENGTH = 1000000;
     private const int MAX_BODY_SIZE = 10485760;
     private const int MAX_JSON_SIZE = 1048576;
     private const int MAX_ARRAY_ITEMS = 1000;
+
+    // Lazy-loaded data (computed only when needed)
     private ?array $parsedBody = null;
     private ?Headers $headersObject = null;
-
-    // Input size limits
-    private ?CacheHeaders $cacheHeaders = null;    // 1MB for strings
-    private ?array $parsedFiles = null;       // 10MB for request body
-    private ?string $clientIp = null;        // 1MB for JSON
-    private ?string $fullUrl = null;         // Max array elements
+    private ?CacheHeaders $cacheHeaders = null;
+    private ?array $parsedFiles = null;
+    private ?string $clientIp = null;
+    private ?string $fullUrl = null;
 
     /**
      * @param string $method HTTP method
@@ -62,12 +61,12 @@ final class Request
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
-        // ✅ Erweiterte URI-Validierung mit RequestSanitizer
+        // Erweiterte URI-Validierung mit RequestSanitizer
         if (preg_match('/^[A-Z]:/i', $uri)) {
             throw new InvalidArgumentException('Invalid request URI: contains absolute path');
         }
 
-        // ✅ Basis-Path-Validierung vor DetailValidierung
+        // Basis-Path-Validierung vor DetailValidierung
         $path = parse_url($uri, PHP_URL_PATH) ?? '/';
 
         // Additional path validation
@@ -90,7 +89,7 @@ final class Request
             contentLength: $contentLength
         );
 
-        // ✅ Umfassende Sicherheitsvalidierung durch RequestSanitizer
+        // Umfassende Sicherheitsvalidierung durch RequestSanitizer
         RequestSanitizer::validateRequest($request);
 
         return $request;
@@ -154,6 +153,11 @@ final class Request
         return $this->headers()->isAjax();
     }
 
+    public function isJson(): bool
+    {
+        return str_contains($this->contentType, 'application/json');
+    }
+
     // === Security & Network Info ===
 
     public function url(): string
@@ -178,23 +182,55 @@ final class Request
             strtolower($this->header('x-forwarded-proto') ?? '') === 'https';
     }
 
+    public function host(): string
+    {
+        return $this->header('host') ?? $this->server['SERVER_NAME'] ?? 'localhost';
+    }
+
     public function header(string $name): ?string
     {
         return $this->headers()->get($name);
     }
 
-    public function get(string $key, mixed $default = null): mixed
+    public function ip(): string
     {
-        return $this->query[$key] ?? $this->input($key, $default);
+        // Lazy computation - only calculate once
+        if ($this->clientIp === null) {
+            $forwardedIps = $this->headers()->forwardedFor();
+            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
+        }
+
+        return $this->clientIp;
     }
 
-    public function input(string $key, mixed $default = null): mixed
+    public function userAgent(): string
     {
-        $body = $this->body();
-        return $body[$key] ?? $default;
+        return $this->header('user-agent') ?? '';
     }
 
-    // === Headers (via Headers class) ===
+    // === Caching ===
+
+    public function cache(): CacheHeaders
+    {
+        if ($this->cacheHeaders === null) {
+            $this->cacheHeaders = new CacheHeaders($this->headers());
+        }
+        return $this->cacheHeaders;
+    }
+
+    // === Query Parameters (Eager) ===
+
+    public function query(string $key, mixed $default = null): mixed
+    {
+        return $this->query[$key] ?? $default;
+    }
+
+    public function queryAll(): array
+    {
+        return $this->query;
+    }
+
+    // === Body Parameters (Lazy Parsed) ===
 
     public function body(): array
     {
@@ -252,15 +288,6 @@ final class Request
         return is_array($parsed) ? $parsed : [];
     }
 
-    // === Caching ===
-
-    public function isJson(): bool
-    {
-        return str_contains($this->contentType, 'application/json');
-    }
-
-    // === Query Parameters (Eager) ===
-
     /**
      * Parse JSON string safely
      */
@@ -288,36 +315,22 @@ final class Request
         }
     }
 
-    public function host(): string
+    public function inputAll(): array
     {
-        return $this->header('host') ?? $this->server['SERVER_NAME'] ?? 'localhost';
-    }
-
-    // === Body Parameters (Lazy Parsed) ===
-
-    public function cache(): CacheHeaders
-    {
-        if ($this->cacheHeaders === null) {
-            $this->cacheHeaders = new CacheHeaders($this->headers());
-        }
-        return $this->cacheHeaders;
-    }
-
-    public function query(string $key, mixed $default = null): mixed
-    {
-        return $this->query[$key] ?? $default;
-    }
-
-    public function queryAll(): array
-    {
-        return $this->query;
+        return $this->body();
     }
 
     // === Universal Parameter Access ===
 
-    public function inputAll(): array
+    public function get(string $key, mixed $default = null): mixed
     {
-        return $this->body();
+        return $this->query[$key] ?? $this->input($key, $default);
+    }
+
+    public function input(string $key, mixed $default = null): mixed
+    {
+        $body = $this->body();
+        return $body[$key] ?? $default;
     }
 
     public function has(string $key): bool
@@ -382,6 +395,27 @@ final class Request
     }
 
     /**
+     * Get parameter as string with optional default and size limit
+     */
+    public function string(string $key, string $default = ''): string
+    {
+        $value = $this->get($key);
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        $stringValue = (string)$value;
+
+        // Check size limit
+        if (strlen($stringValue) > self::MAX_STRING_LENGTH) {
+            return $default; // Return default for oversized input
+        }
+
+        return $stringValue;
+    }
+
+    /**
      * Get parameter as array with optional default and size limits
      */
     public function array(string $key, array $default = []): array
@@ -412,7 +446,6 @@ final class Request
     public function date(string $key, ?DateTimeImmutable $default = null): ?DateTimeImmutable
     {
         $value = $this->string($key);
-
         if ($value === '') {
             return $default;
         }
@@ -424,25 +457,50 @@ final class Request
         }
     }
 
-    /**
-     * Get parameter as string with optional default and size limit
-     */
-    public function string(string $key, string $default = ''): string
-    {
-        $value = $this->get($key);
+    // === Input Sanitization ===
 
-        if ($value === null || $value === '') {
+    /**
+     * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
+     */
+    public function sanitized(string $key, string $default = ''): string
+    {
+        $value = $this->string($key);
+
+        if ($value === '') {
             return $default;
         }
 
-        $stringValue = (string)$value;
+        try {
+            return RequestSanitizer::sanitizeParameter($value, 'default');
+        } catch (InvalidArgumentException) {
+            return $default;
+        }
+    }
 
-        // Check size limit
-        if (strlen($stringValue) > self::MAX_STRING_LENGTH) {
-            return $default; // Return default for oversized input
+    /**
+     * Get parameter with HTML tags stripped
+     */
+    public function stripped(string $key, string $default = ''): string
+    {
+        return $this->sanitized($key, $default); // Vereinheitlichung mit sanitized()
+    }
+
+    /**
+     * Get parameter with only allowed HTML tags
+     */
+    public function cleaned(string $key, array $allowedTags = [], string $default = ''): string
+    {
+        $value = $this->string($key);
+
+        if ($value === '') {
+            return $default;
         }
 
-        return $stringValue;
+        try {
+            return RequestSanitizer::sanitizeParameter($value, 'html', ['allowed_tags' => $allowedTags]);
+        } catch (InvalidArgumentException) {
+            return $default;
+        }
     }
 
     /**
@@ -481,8 +539,6 @@ final class Request
         }
     }
 
-    // === Input Sanitization ===
-
     /**
      * Get parameter as JSON (validated and decoded)
      */
@@ -497,56 +553,7 @@ final class Request
         return $this->parseJsonString($value, $default);
     }
 
-    /**
-     * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
-     */
-    public function sanitized(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-
-        if ($value === '') {
-            return $default;
-        }
-
-        try {
-            return RequestSanitizer::sanitizeParameter($value, 'default');
-        } catch (InvalidArgumentException) {
-            return $default;
-        }
-    }
-
-    /**
-     * Get parameter with HTML tags stripped
-     */
-    public function stripped(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-
-        if ($value === '') {
-            return $default;
-        }
-
-        return trim(strip_tags($value));
-    }
-
     // === File Uploads (Lazy Parsed) ===
-
-    /**
-     * Get parameter with only allowed HTML tags
-     */
-    public function cleaned(string $key, array $allowedTags = [], string $default = ''): string
-    {
-        $value = $this->string($key);
-
-        if ($value === '') {
-            return $default;
-        }
-
-        // Convert array to string format for strip_tags
-        $allowedTagsStr = empty($allowedTags) ? '' : '<' . implode('><', $allowedTags) . '>';
-
-        return trim(strip_tags($value, $allowedTagsStr));
-    }
 
     public function hasFile(string $key): bool
     {
@@ -563,11 +570,9 @@ final class Request
             return null;
         }
 
-        // ✅ Sichere File-Upload-Validierung
+        // Sichere File-Upload-Validierung
         return $this->validateUploadedFile($file);
     }
-
-    // === Cookies (Eager) ===
 
     public function files(): array
     {
@@ -579,10 +584,8 @@ final class Request
         return $this->parsedFiles;
     }
 
-    // === Raw Access ===
-
     /**
-     * ✅ Erweiterte File-Upload-Validierung mit RequestSanitizer-Integration
+     * Erweiterte File-Upload-Validierung mit RequestSanitizer-Integration
      */
     private function validateUploadedFile(array $file): ?array
     {
@@ -610,7 +613,7 @@ final class Request
             throw new InvalidArgumentException('File type not allowed');
         }
 
-        // ✅ Prüfe Dateiname mit RequestSanitizer
+        // Prüfe Dateiname mit RequestSanitizer
         $filename = basename($file['name']);
         if (!preg_match('/^[a-zA-Z0-9._-]+$/', $filename)) {
             throw new InvalidArgumentException('Invalid filename');
@@ -619,20 +622,24 @@ final class Request
         return $file;
     }
 
+    // === Cookies (Eager) ===
+
     public function cookie(string $name, mixed $default = null): mixed
     {
         return $this->cookies[$name] ?? $default;
     }
+
+    // === Raw Access ===
 
     public function raw(): string
     {
         return $this->rawBody;
     }
 
-    // === Private Helper Methods ===
+    // === Batch Sanitization ===
 
     /**
-     * ✅ Erweiterte Sanitization-Methoden mit RequestSanitizer
+     * Erweiterte Sanitization-Methoden mit RequestSanitizer
      */
     public function sanitizeAll(array $types = []): array
     {
@@ -654,21 +661,5 @@ final class Request
             'ip' => $this->ip(),
             'user_agent' => substr($this->userAgent(), 0, 100) // Truncate for security
         ];
-    }
-
-    public function ip(): string
-    {
-        // Lazy computation - only calculate once
-        if ($this->clientIp === null) {
-            $forwardedIps = $this->headers()->forwardedFor();
-            $this->clientIp = $forwardedIps[0] ?? $this->server['REMOTE_ADDR'] ?? 'unknown';
-        }
-
-        return $this->clientIp;
-    }
-
-    public function userAgent(): string
-    {
-        return $this->header('user-agent') ?? '';
     }
 }

@@ -1,6 +1,5 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Http;
@@ -23,7 +22,6 @@ final class RequestSanitizer
         'ftp://', 'http://', 'https://',
         '\\.\\', '//\\', '\\/\\', '\\\\',
         '%5c%5c', '%2f%5c', '%5c%2f',
-        // Zusätzliche gefährliche Muster
         '..%2f', '..%5c', '%2e%2e',
         '%c0%af', '%c1%9c'
     ];
@@ -31,6 +29,22 @@ final class RequestSanitizer
     private const int MAX_PATH_LENGTH = 2048;
     private const int MAX_SUBDOMAIN_LENGTH = 63;
     private const int MAX_PARAMETER_LENGTH = 255;
+
+    /**
+     * Sichere Klassennamen-Validierung
+     */
+    public static function isSecureClassName(string $className): bool
+    {
+        return match (true) {
+            empty($className) => false,
+            strlen($className) > 255 => false,
+            str_contains($className, '..') => false,
+            str_contains($className, '/') => false,
+            str_contains($className, "\0") => false,
+            !preg_match('/^[a-zA-Z_\\\\][a-zA-Z0-9_\\\\]*$/', $className) => false,
+            default => true
+        };
+    }
 
     /**
      * Extrahiere und validiere Subdomain aus Host
@@ -90,7 +104,7 @@ final class RequestSanitizer
         }
 
         // RFC 1123 Hostname validation
-        return preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,251}[a-zA-Z0-9])?$/', $hostname) === 1;
+        return preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9\-.]{0,251}[a-zA-Z0-9])?$/', $hostname) === 1;
     }
 
     /**
@@ -151,7 +165,7 @@ final class RequestSanitizer
     /**
      * Sanitize einzelne Parameter
      */
-    public static function sanitizeParameter(string $value, string $type = 'default'): string
+    public static function sanitizeParameter(string $value, string $type = 'default', array $options = []): string
     {
         // Längencheck
         if (strlen($value) > self::MAX_PARAMETER_LENGTH) {
@@ -169,13 +183,14 @@ final class RequestSanitizer
         }
 
         return match ($type) {
-            'integer' => self::sanitizeIntegerParameter($value),
+            'integer', 'int' => self::sanitizeIntegerParameter($value),
             'uuid' => self::sanitizeUuidParameter($value),
             'slug' => self::sanitizeSlugParameter($value),
             'alpha' => self::sanitizeAlphaParameter($value),
             'alnum' => self::sanitizeAlnumParameter($value),
             'email' => self::sanitizeEmailParameter($value),
             'url' => self::sanitizeUrlParameter($value),
+            'html' => self::sanitizeHtmlParameter($value, $options['allowed_tags'] ?? []),
             default => self::sanitizeDefaultParameter($value)
         };
     }
@@ -275,6 +290,16 @@ final class RequestSanitizer
         }
 
         return $filtered;
+    }
+
+    private static function sanitizeHtmlParameter(string $value, array $allowedTags = []): string
+    {
+        if (empty($allowedTags)) {
+            return trim(strip_tags($value));
+        }
+
+        $allowedTagsStr = '<' . implode('><', $allowedTags) . '>';
+        return trim(strip_tags($value, $allowedTagsStr));
     }
 
     private static function sanitizeDefaultParameter(string $value): string
