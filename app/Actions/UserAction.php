@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Actions;
 
-use InvalidArgumentException;
 use Framework\Http\{Request, Response};
 use Framework\Routing\Attributes\Route;
+use InvalidArgumentException;
 
 /**
  * Test Action für verschiedene Parameter-Typen

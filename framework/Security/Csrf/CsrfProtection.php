@@ -63,8 +63,8 @@ final class CsrfProtection implements CsrfProtectionInterface
 
     public function validateFromRequest(
         Request $request,
-        ?string                 $action = 'default',
-        bool                    $consume = true
+        ?string $action = 'default',
+        bool    $consume = true
     ): bool
     {
         return $this->validator->validateFromRequest($request, $action ?? 'default', $consume);

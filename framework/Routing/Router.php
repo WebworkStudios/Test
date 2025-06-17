@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace Framework\Routing;
 
 use Framework\Container\ContainerInterface;
-use InvalidArgumentException;
 use Framework\Http\{Request, Response};
 use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 

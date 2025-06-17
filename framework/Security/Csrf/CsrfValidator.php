@@ -60,8 +60,8 @@ final readonly class CsrfValidator
      */
     public function validateFromRequest(
         Request $request,
-        string                  $action = 'default',
-        bool                    $consume = true
+        string  $action = 'default',
+        bool    $consume = true
     ): bool
     {
         $token = $this->extractTokenFromRequest($request);

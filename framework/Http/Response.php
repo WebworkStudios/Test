@@ -225,12 +225,12 @@ final class Response
      * Create cached response with ETag and Last-Modified headers
      */
     public static function cached(
-        string             $content,
-        string             $etag,
+        string            $content,
+        string            $etag,
         DateTimeImmutable $lastModified,
-        int                $maxAge = 3600,
-        bool               $public = true,
-        string             $contentType = 'text/html; charset=utf-8'
+        int               $maxAge = 3600,
+        bool              $public = true,
+        string            $contentType = 'text/html; charset=utf-8'
     ): self
     {
         $cacheHeaders = CacheHeaders::forResponse($etag, $lastModified, $maxAge, $public);
@@ -453,6 +453,15 @@ final class Response
 
         error_log("=== Response::send() COMPLETE ===");
     }
+
+    /**
+     * Get specific header
+     */
+    public function getHeader(string $name): ?string
+    {
+        return $this->headers->get($name);
+    }
+
     /**
      * Get response body
      */
@@ -475,14 +484,6 @@ final class Response
     public function getHeaders(): array
     {
         return $this->headers->all();
-    }
-
-    /**
-     * Get specific header
-     */
-    public function getHeader(string $name): ?string
-    {
-        return $this->headers->get($name);
     }
 
     /**
