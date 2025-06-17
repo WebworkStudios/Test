@@ -109,7 +109,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Faster pattern compilation
+     * ✅ FINAL FIX: Sichere Pattern-Kompilierung
      */
     private static function compilePattern(string $path): string
     {
@@ -118,14 +118,33 @@ final class RouteInfo
             return '#^' . preg_quote($path, '#') . '$#';
         }
 
-        // ✅ Optimized: Single pass pattern compilation
-        $pattern = preg_replace_callback(
+        // ✅ SICHERSTE LÖSUNG: Schritt-für-Schritt ohne Escape-Konflikte
+
+        // Schritt 1: Ersetze Parameter durch eindeutige Platzhalter
+        $placeholders = [];
+        $placeholderIndex = 0;
+
+        $processedPath = preg_replace_callback(
             '/\{([^}]+)\}/',
-            fn($matches) => self::getConstraintPattern($matches[1]),
-            preg_quote($path, '#')
+            function($matches) use (&$placeholders, &$placeholderIndex) {
+                $param = $matches[1];
+                $placeholder = "PLACEHOLDER_{$placeholderIndex}";
+                $placeholders[$placeholder] = self::getConstraintPattern($param);
+                $placeholderIndex++;
+                return $placeholder;
+            },
+            $path
         );
 
-        return '#^' . $pattern . '$#';
+        // Schritt 2: Escape den Pfad (jetzt ohne Parameter)
+        $escapedPath = preg_quote($processedPath, '#');
+
+        // Schritt 3: Ersetze Platzhalter durch Regex-Muster
+        foreach ($placeholders as $placeholder => $pattern) {
+            $escapedPath = str_replace($placeholder, $pattern, $escapedPath);
+        }
+
+        return '#^' . $escapedPath . '$#';
     }
 
     /**
@@ -167,7 +186,7 @@ final class RouteInfo
     }
 
     /**
-     * ✅ OPTIMIZED: Fast route matching
+     * ✅ FIX: Sichere matches() Methode mit Fehlerbehandlung
      */
     public function matches(string $method, string $path, ?string $subdomain = null): bool
     {
@@ -186,12 +205,17 @@ final class RouteInfo
             return $this->originalPath === $path;
         }
 
-        // Dynamic route pattern match
-        return preg_match($this->pattern, $path) === 1;
+        // Dynamic route pattern match with error handling
+        try {
+            return preg_match($this->pattern, $path) === 1;
+        } catch (\Throwable $e) {
+            error_log("❌ Regex error in route pattern '{$this->pattern}' for path '{$path}': " . $e->getMessage());
+            return false;
+        }
     }
 
     /**
-     * ✅ OPTIMIZED: Fast parameter extraction with validation
+     * ✅ FIX: Sichere extractParams() mit Fehlerbehandlung
      */
     public function extractParams(string $path): array
     {
@@ -199,30 +223,36 @@ final class RouteInfo
             return [];
         }
 
-        if (!preg_match($this->pattern, $path, $matches)) {
-            throw new InvalidArgumentException("Path does not match route pattern");
-        }
-
-        $params = [];
-        $constraints = $this->getParameterConstraints();
-
-        foreach ($this->paramNames as $index => $name) {
-            $value = $matches[$index + 1] ?? '';
-
-            // ✅ Fast validation
-            if (strlen($value) > 255 || str_contains($value, "\0")) {
-                throw new InvalidArgumentException("Invalid parameter value");
+        try {
+            if (!preg_match($this->pattern, $path, $matches)) {
+                throw new InvalidArgumentException("Path does not match route pattern");
             }
 
-            // ✅ Apply constraint validation if exists
-            if (isset($constraints[$name])) {
-                $value = $this->validateConstraint($value, $constraints[$name]);
+            $params = [];
+            $constraints = $this->getParameterConstraints();
+
+            foreach ($this->paramNames as $index => $name) {
+                $value = $matches[$index + 1] ?? '';
+
+                // ✅ Fast validation
+                if (strlen($value) > 255 || str_contains($value, "\0")) {
+                    throw new InvalidArgumentException("Invalid parameter value");
+                }
+
+                // ✅ Apply constraint validation if exists
+                if (isset($constraints[$name])) {
+                    $value = $this->validateConstraint($value, $constraints[$name]);
+                }
+
+                $params[$name] = $value;
             }
 
-            $params[$name] = $value;
-        }
+            return $params;
 
-        return $params;
+        } catch (\Throwable $e) {
+            error_log("❌ Parameter extraction error for pattern '{$this->pattern}' and path '{$path}': " . $e->getMessage());
+            throw new InvalidArgumentException("Failed to extract parameters: " . $e->getMessage());
+        }
     }
 
     /**

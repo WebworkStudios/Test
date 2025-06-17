@@ -9,6 +9,7 @@ use Framework\Http\{Request, Response};
 use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Optimized Router with RouterCore delegation for performance
@@ -55,12 +56,24 @@ final class Router
      */
     public static function create(ContainerInterface $container, array $config = []): self
     {
+        // ✅ FIX: Sicherstellen, dass $config['cache'] ein Array ist
+        $cacheConfig = $config['cache'] ?? [];
+        if (!is_array($cacheConfig)) {
+            $cacheConfig = [];
+        }
+
         $cache = isset($config['cache_dir'])
-            ? new RouteCache($config['cache_dir'], ...$config['cache'] ?? [])
+            ? new RouteCache($config['cache_dir'], ...$cacheConfig)
             : null;
 
+        // ✅ FIX: Sicherstellen, dass $config['discovery'] ein Array ist
+        $discoveryConfig = $config['discovery'] ?? [];
+        if (!is_array($discoveryConfig)) {
+            $discoveryConfig = [];
+        }
+
         $discovery = isset($config['discovery'])
-            ? RouteDiscovery::create(new self($container), $config['discovery'])
+            ? RouteDiscovery::create(new self($container), $discoveryConfig)
             : null;
 
         return new self(
@@ -75,19 +88,31 @@ final class Router
     }
 
     /**
-     * High-Performance dispatch - delegates to RouterCore
+     * High-Performance dispatch - delegates to RouterCore only when safe
      */
     public function dispatch(Request $request): Response
     {
-        // ✅ Production: Use RouterCore for maximum performance
-        if (!$this->debugMode && $this->hasCompiledRoutes()) {
-            return $this->getCore()->dispatch($request);
+        // ✅ SICHERSTE LÖSUNG: Im Debug-Modus immer die Original-Methode verwenden
+        if ($this->debugMode) {
+            return $this->dispatchOriginal($request);
         }
 
-        // ✅ Debug/Development: Use original logic with full debugging
+        // ✅ Production: RouterCore nur wenn gültiger Cache vorhanden
+        if ($this->hasCompiledRoutes()) {
+            try {
+                return $this->getCore()->dispatch($request);
+            } catch (Throwable $e) {
+                // ✅ Fallback bei RouterCore-Fehlern
+                if ($this->debugMode) {
+                    error_log("RouterCore failed, falling back to original: " . $e->getMessage());
+                }
+                return $this->dispatchOriginal($request);
+            }
+        }
+
+        // ✅ Fallback: Original-Methode wenn kein Cache verfügbar
         return $this->dispatchOriginal($request);
     }
-
     /**
      * Check if we have compiled routes available
      */
