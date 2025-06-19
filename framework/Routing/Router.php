@@ -84,12 +84,13 @@ final class Router
         }
     }
 
+
     /**
      * Create router with default configuration
      */
     public static function create(ContainerInterface $container, array $config = []): self
     {
-        // ✅ FIX: Cache nur aktivieren wenn explizit gewünscht
+        // Cache-Konfiguration
         $cacheEnabled = ($config['cache'] ?? false) === true;
 
         // Create RouteCacheManager nur wenn Cache aktiviert und cache_dir vorhanden
@@ -104,18 +105,18 @@ final class Router
             );
         }
 
-        // ✅ FIX: Erstelle Router erst, dann Discovery
+        // Router ohne Discovery erstellen
         $router = new self(
             container: $container,
             cacheManager: $cacheManager,
-            discovery: null, // Wird später gesetzt
+            discovery: null, // Wird separat gesetzt
             debugMode: $config['debug'] ?? false,
             allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
             baseDomain: $config['base_domain'] ?? 'localhost',
             cacheEnabled: $cacheEnabled
         );
 
-        // ✅ FIX: Discovery mit dem ECHTEN Router erstellen
+        // Discovery separat erstellen und setzen
         if ($config['auto_discover'] ?? true) {
             $discoveryConfig = $config['discovery'] ?? [
                 'strict_mode' => false,
@@ -124,10 +125,18 @@ final class Router
             ];
 
             $discovery = RouteDiscovery::create($router, $discoveryConfig);
-            $router->discovery = $discovery; // ✅ Discovery setzen
+            $router->setDiscovery($discovery);
         }
 
         return $router;
+    }
+
+    /**
+     * Set discovery instance (löst zirkuläre Abhängigkeit)
+     */
+    public function setDiscovery(RouteDiscovery $discovery): void
+    {
+        $this->discovery = $discovery;
     }
 
     /**
