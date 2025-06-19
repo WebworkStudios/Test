@@ -7,13 +7,18 @@ namespace Framework;
 use Framework\Container\Container;
 use Framework\Http\{Request, RequestSanitizer, Response};
 use framework\Http\Session\Session;
-use Framework\Routing\{Router};
-use Framework\Routing\Exceptions\{MethodNotAllowedException, RouteNotFoundException};
+use Framework\Routing\{Attributes\Route,
+    Exceptions\MethodNotAllowedException,
+    Exceptions\RouteNotFoundException,
+    Router};
 use Framework\Security\Csrf\CsrfProtection;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use ReflectionClass;
 use Throwable;
 
 /**
- * Enhanced Kernel with simplified, secure Route Discovery
+ * Enhanced Kernel with Router Performance Integration
  */
 final class Kernel
 {
@@ -54,7 +59,7 @@ final class Kernel
             });
             error_log("✅ CSRF protection registered");
 
-            // Register Router - simplified without immediate discovery
+            // ✅ FIX: Vereinfachte Router-Registrierung OHNE sofortige Discovery
             $this->container->singleton(Router::class, function (Container $c) {
                 error_log("🔄 Creating router instance...");
 
@@ -62,7 +67,7 @@ final class Kernel
 
                 $router = Router::create($c, [
                     'debug' => $this->config['app']['debug'] ?? false,
-                    'strict' => $routingConfig['strict'] ?? false,
+                    'strict' => $routingConfig['strict'] ?? false, // ✅ Weniger strikt für bessere Kompatibilität
                     'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
                     'cache' => $routingConfig['cache'] ?? [],
                     'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
@@ -90,7 +95,7 @@ final class Kernel
         error_log("Request: " . $request->method . " " . $request->path);
 
         try {
-            // Comprehensive request validation with RequestSanitizer
+            // ✅ Umfassende Request-Validierung mit RequestSanitizer
             error_log("🔒 Validating request security...");
             RequestSanitizer::validateRequest($request);
             error_log("✅ Request security validation passed");
@@ -117,82 +122,116 @@ final class Kernel
     }
 
     /**
-     * Boot the kernel and all services
+     * Handle incoming HTTP request with performance optimizations
      */
+
     /**
-     * ✅ Cache-Reset bei Boot-Problem
+     * Boot the kernel and all services
      */
     public function boot(): void
     {
         if ($this->booted) {
+            error_log("ℹ️ Kernel already booted, skipping");
             return;
         }
 
         try {
+            error_log("🔄 Starting session...");
             // Start session
             $session = $this->container->get(Session::class);
             $session->start();
+            error_log("✅ Session started");
 
-            // ✅ CACHE-RESET: Lösche Cache wenn Debug-Mode
-            if (($this->config['app']['debug'] ?? false)) {
-                $router = $this->container->get(Router::class);
-                $router->clearCaches();
-                error_log("🧹 Debug mode: Caches cleared");
-            }
-
-            // Route-Discovery
+            // ✅ FIX: Route-Discovery nur einmal und nur wenn konfiguriert
             if (($this->config['routing']['auto_discover'] ?? true)) {
+                error_log("🔄 Starting route discovery...");
                 $router = $this->container->get(Router::class);
-                $this->performRouteDiscovery($router);
+
+                // Prüfe ob bereits Routen vorhanden sind (verhindert doppelte Registrierung)
+                if (empty($router->getRoutes())) {
+                    $this->performSingleRouteDiscovery($router);
+                } else {
+                    error_log("ℹ️ Routes already discovered, skipping");
+                }
+
+                error_log("✅ Route discovery completed");
             }
 
+            error_log("🔄 Booting providers...");
+            // Boot service providers
             $this->bootProviders();
+            error_log("✅ Providers booted");
+
             $this->booted = true;
+            error_log("✅ Kernel boot completed");
 
         } catch (Throwable $e) {
             error_log("❌ Kernel::boot() exception: " . $e->getMessage());
+            error_log("   File: " . $e->getFile() . ":" . $e->getLine());
             throw $e;
         }
     }
 
     /**
-     * ✅ EINFACHSTE LÖSUNG: Discovery immer im Debug-Modus ausführen
+     * ✅ NEUE METHODE: Vereinfachte, sichere Route-Discovery
      */
-    private function performRouteDiscovery(Router $router): void
+    private function performSingleRouteDiscovery(Router $router): void
     {
-        // ✅ FIX: Im Debug-Modus immer Discovery ausführen, auch wenn Routen existieren
-        $currentRoutes = $router->getRoutes();
-        $isDebugMode = $this->config['app']['debug'] ?? false;
-
-        if (!empty($currentRoutes) && !$isDebugMode) {
-            error_log("ℹ️ Routes already registered, skipping discovery (production mode)");
-            return;
-        }
-
-        if (!empty($currentRoutes) && $isDebugMode) {
-            error_log("🔄 Routes exist but running discovery anyway (debug mode)");
-        }
-
         $directories = $this->config['routing']['discovery_paths'] ?? [
             __DIR__ . '/../app/Actions',
             __DIR__ . '/../app/Controllers'
         ];
 
+        error_log("🔍 Route-Discovery startet für Verzeichnisse: " . implode(', ', $directories));
+
+        // Filtere existierende Verzeichnisse
+        $existingDirs = array_filter($directories, function ($dir) {
+            $exists = is_dir($dir) && is_readable($dir);
+            error_log($exists ? "✅ Verzeichnis OK: {$dir}" : "❌ Verzeichnis fehlt: {$dir}");
+            return $exists;
+        });
+
+        if (empty($existingDirs)) {
+            error_log("⚠️ Keine gültigen Verzeichnisse für Route-Discovery gefunden!");
+            return;
+        }
+
         try {
-            // ✅ DIREKTE DISCOVERY: Verwende Router's autoDiscoverRoutes
-            $router->autoDiscoverRoutes($directories);
+            // Verwende Router's eigene Discovery-Methode
+            $router->autoDiscoverRoutes($existingDirs);
 
             $routes = $router->getRoutes();
             $totalRoutes = array_sum(array_map('count', $routes));
-            error_log("📋 Total {$totalRoutes} routes registered");
+            error_log("📋 Insgesamt {$totalRoutes} Routen registriert");
 
         } catch (Throwable $e) {
-            error_log("❌ Route-Discovery error: " . $e->getMessage());
+            error_log("❌ Route-Discovery Fehler: " . $e->getMessage());
 
-            // ✅ ORIGINAL FALLBACK: Direkte Klassen-Registrierung
+            // ✅ Fallback: Minimale manuelle Registrierung
+            if (empty($router->getRoutes())) {
+                error_log("🔄 Fallback: Registriere HomeAction manuell...");
+                $this->registerFallbackRoutes($router);
+            }
+        }
+    }
+
+    /**
+     * ✅ NEUE METHODE: Fallback-Routen für kritische Pfade
+     */
+
+    private function registerFallbackRoutes(Router $router): void
+    {
+        try {
+            // Nur die absolut kritische HomeAction als Fallback
             if (class_exists('App\\Actions\\HomeAction')) {
                 $router->addRoute('GET', '/', 'App\\Actions\\HomeAction', [], 'home');
+                error_log("✅ HomeAction als Fallback registriert");
+            } else {
+                error_log("⚠️ HomeAction nicht gefunden - keine Fallback-Route verfügbar");
             }
+
+        } catch (Throwable $e) {
+            error_log("❌ Fallback-Registrierung fehlgeschlagen: " . $e->getMessage());
         }
     }
 
@@ -338,5 +377,204 @@ final class Kernel
         }
 
         $this->booted = false;
+    }
+
+    /**
+     * Get framework performance statistics
+     */
+
+    /**
+     * Create optimized router with proper configuration
+     */
+    private function createOptimizedRouter(Container $container): Router
+    {
+        $routingConfig = $this->config['routing'] ?? [];
+
+        return Router::create($container, [
+            'debug' => $this->config['debug'] ?? false,
+            'strict' => $routingConfig['strict'] ?? true,
+            'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
+            'cache' => $routingConfig['cache'] ?? [],
+            'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+            'base_domain' => $this->config['app']['domain'] ?? 'localhost'
+        ]);
+    }
+
+    /**
+     * ✅ NEUE METHODE: Sofortige Route-Discovery mit Duplikat-Schutz
+     */
+    private function performRouteDiscoveryImmediate(Router $router): void
+    {
+        // ✅ Prüfe ob bereits Routen registriert sind
+        $currentRoutes = $router->getRoutes();
+        if (!empty($currentRoutes)) {
+            error_log("⚠️ Routen bereits registriert, überspringe Discovery");
+            return;
+        }
+
+        $directories = $this->config['routing']['discovery_paths'] ?? [
+            __DIR__ . '/../app/Actions',
+            __DIR__ . '/../app/Controllers'
+        ];
+
+        error_log("🔍 Route-Discovery startet...");
+        error_log("📁 Aktuelles Verzeichnis: " . getcwd());
+
+        // Prüfe ob Verzeichnisse existieren
+        $existingDirs = [];
+        foreach ($directories as $dir) {
+            $realPath = realpath($dir);
+            error_log("🔍 Prüfe Verzeichnis: {$dir} (realpath: " . ($realPath ?: 'false') . ")");
+
+            if ($realPath !== false && is_dir($realPath) && is_readable($realPath)) {
+                $existingDirs[] = $realPath;
+                error_log("✅ Verzeichnis gefunden: {$realPath}");
+
+                // ✅ Zeige Inhalt des Verzeichnisses
+                $files = glob($realPath . '/*.php');
+                error_log("   📄 PHP-Dateien: " . count($files));
+                foreach ($files as $file) {
+                    error_log("     - " . basename($file));
+                }
+            } else {
+                error_log("❌ Verzeichnis nicht zugänglich: {$dir}");
+            }
+        }
+
+        if (empty($existingDirs)) {
+            error_log("⚠️ Keine gültigen Verzeichnisse für Route-Discovery gefunden!");
+            return;
+        }
+
+        try {
+            // ✅ Vereinfachte Route-Discovery ohne mehrfache Registrierung
+            $discoveredRoutes = 0;
+
+            foreach ($existingDirs as $dir) {
+                error_log("🔍 Scanne Verzeichnis: {$dir}");
+                $routesInDir = $this->scanDirectoryForRoutesOnce($router, $dir);
+                $discoveredRoutes += $routesInDir;
+            }
+
+            // Zeige gefundene Routen
+            $routes = $router->getRoutes();
+            $totalRoutes = array_sum(array_map('count', $routes));
+            error_log("📋 Insgesamt {$totalRoutes} Routen registriert");
+
+        } catch (Throwable $e) {
+            error_log("❌ Route-Discovery Fehler: " . $e->getMessage());
+            error_log("   Datei: " . $e->getFile() . ":" . $e->getLine());
+        }
+    }
+
+    /**
+     * ✅ NEUE METHODE: Einmalige Verzeichnis-Scanner mit Duplikat-Schutz
+     */
+    private function scanDirectoryForRoutesOnce(Router $router, string $directory): int
+    {
+        static $processedFiles = [];
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+
+        $routesAdded = 0;
+
+        foreach ($iterator as $file) {
+            if ($file->getExtension() === 'php' && $file->isFile()) {
+                $filePath = $file->getPathname();
+
+                // ✅ Überspringe bereits verarbeitete Dateien
+                if (isset($processedFiles[$filePath])) {
+                    continue;
+                }
+
+                $processedFiles[$filePath] = true;
+                $routesAdded += $this->scanFileForRoutesOnce($router, $filePath);
+            }
+        }
+
+        return $routesAdded;
+    }
+
+    /**
+     * ✅ NEUE METHODE: Einmalige Datei-Scanner mit besserer Fehlerbehandlung
+     */
+    private function scanFileForRoutesOnce(Router $router, string $filePath): int
+    {
+        try {
+            $content = file_get_contents($filePath);
+            if ($content === false || !str_contains($content, '#[Route')) {
+                return 0;
+            }
+
+            // Extrahiere Namespace und Klassennamen
+            $namespace = null;
+            $className = null;
+
+            if (preg_match('/namespace\s+([^;]+);/', $content, $matches)) {
+                $namespace = trim($matches[1]);
+            }
+
+            if (preg_match('/class\s+(\w+)/', $content, $matches)) {
+                $className = trim($matches[1]);
+            }
+
+            if (!$namespace || !$className) {
+                return 0;
+            }
+
+            $fullClassName = $namespace . '\\' . $className;
+
+            // Prüfe ob Klasse existiert
+            if (!class_exists($fullClassName)) {
+                error_log("⚠️ Klasse nicht gefunden: {$fullClassName}");
+                return 0;
+            }
+
+            $reflection = new ReflectionClass($fullClassName);
+            $attributes = $reflection->getAttributes(Route::class);
+
+            if (empty($attributes)) {
+                return 0;
+            }
+
+            error_log("🎯 Routen gefunden in: {$fullClassName}");
+
+            $routesAdded = 0;
+
+            // Registriere alle Route-Attribute
+            foreach ($attributes as $attribute) {
+                try {
+                    $route = $attribute->newInstance();
+
+                    $router->addRoute(
+                        $route->method,
+                        $route->path,
+                        $fullClassName,
+                        $route->middleware,
+                        $route->name,
+                        $route->subdomain
+                    );
+
+                    error_log("   ✅ Route registriert: {$route->method} {$route->path} -> {$fullClassName}");
+                    $routesAdded++;
+
+                } catch (Throwable $e) {
+                    // ✅ Überspringe doppelte Routen-Namen ohne Fehler
+                    if (str_contains($e->getMessage(), 'already exists')) {
+                        error_log("   ⚠️ Route übersprungen (bereits vorhanden): {$route->method} {$route->path}");
+                    } else {
+                        error_log("❌ Fehler beim Registrieren: " . $e->getMessage());
+                    }
+                }
+            }
+
+            return $routesAdded;
+
+        } catch (Throwable $e) {
+            error_log("❌ Fehler beim Scannen von {$filePath}: " . $e->getMessage());
+            return 0;
+        }
     }
 }

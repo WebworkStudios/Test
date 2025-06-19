@@ -321,7 +321,7 @@ final class RouteCacheManager
     }
 
     /**
-     * ✅ SAUBERE LÖSUNG: Cache-Validierung mit Integrity-Check
+     * Load routes mit automatischer Fallback-Logik
      */
     public function load(): ?array
     {
@@ -330,72 +330,18 @@ final class RouteCacheManager
         // 1. Versuche optimized cache
         $optimized = $this->loadOptimizedCache();
         if ($optimized !== null) {
-            // ✅ VALIDIERE: Prüfe ob Cache vollständig ist
-            if ($this->validateCacheCompleteness($optimized)) {
-                $this->cacheHits++;
-                return $optimized;
-            } else {
-                error_log("⚠️ Optimized cache incomplete, clearing...");
-                $this->clearOptimizedCache();
-            }
+            $this->cacheHits++;
+            return $optimized;
         }
 
         // 2. Fallback: Standard cache
         $standard = $this->loadStandardCache();
         if ($standard !== null) {
-            if ($this->validateCacheCompleteness($standard)) {
-                $this->cacheHits++;
-                return $standard;
-            } else {
-                error_log("⚠️ Standard cache incomplete, clearing...");
-                $this->clear();
-            }
+            $this->cacheHits++;
+            return $standard;
         }
 
         return null;
-    }
-
-    /**
-     * ✅ NEUE METHODE: Validiere Cache-Vollständigkeit
-     */
-    private function validateCacheCompleteness(array $routes): bool
-    {
-        // Prüfe ob kritische Routen vorhanden sind
-        $hasHomeRoute = false;
-        $hasUserRoute = false;
-
-        foreach ($routes as $method => $methodRoutes) {
-            if ($method === 'GET') {
-                foreach ($methodRoutes as $route) {
-                    if ($route->originalPath === '/') {
-                        $hasHomeRoute = true;
-                    }
-                    if (str_contains($route->originalPath, '/user/{id}')) {
-                        $hasUserRoute = true;
-                    }
-                }
-            }
-        }
-
-        $isComplete = $hasHomeRoute && $hasUserRoute;
-
-        if (!$isComplete) {
-            error_log("📊 Cache validation failed - Home: " . ($hasHomeRoute ? 'OK' : 'MISSING') .
-                ", User: " . ($hasUserRoute ? 'OK' : 'MISSING'));
-        }
-
-        return $isComplete;
-    }
-
-    /**
-     * ✅ NEUE METHODE: Lösche nur optimized cache
-     */
-    private function clearOptimizedCache(): void
-    {
-        $optimizedFile = $this->getOptimizedCacheFile();
-        if (file_exists($optimizedFile)) {
-            unlink($optimizedFile);
-        }
     }
 
     /**
