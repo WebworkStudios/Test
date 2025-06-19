@@ -37,16 +37,19 @@ final class Router
 
     // Performance core
     private ?RouterCore $core = null;
+    private readonly bool $cacheEnabled;
 
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly ?RouteCacheManager $cacheManager = null,
-        private readonly ?RouteDiscovery    $discovery = null,
+        private ?RouteDiscovery             $discovery = null, // ✅ Nicht readonly für spätere Zuweisung
         private readonly bool               $debugMode = false,
         private readonly array              $allowedSubdomains = ['api', 'admin', 'www'],
-        private readonly string             $baseDomain = 'localhost'
+        private readonly string             $baseDomain = 'localhost',
+        bool                                $cacheEnabled = false
     )
     {
+        $this->cacheEnabled = $cacheEnabled;
         $this->loadCachedRoutes();
     }
 
@@ -55,7 +58,7 @@ final class Router
      */
     private function loadCachedRoutes(): void
     {
-        if ($this->cacheManager === null || $this->debugMode) {
+        if ($this->cacheManager === null || $this->debugMode || !$this->cacheEnabled) {
             return;
         }
 
@@ -86,10 +89,13 @@ final class Router
      */
     public static function create(ContainerInterface $container, array $config = []): self
     {
-        // Create RouteCacheManager if cache directory specified
+        // ✅ FIX: Cache nur aktivieren wenn explizit gewünscht
+        $cacheEnabled = ($config['cache'] ?? false) === true;
+
+        // Create RouteCacheManager nur wenn Cache aktiviert und cache_dir vorhanden
         $cacheManager = null;
-        if (isset($config['cache_dir'])) {
-            $cacheConfig = $config['cache'] ?? [];
+        if ($cacheEnabled && isset($config['cache_dir'])) {
+            $cacheConfig = is_array($config['cache']) ? $config['cache'] : [];
             $cacheManager = new RouteCacheManager(
                 $config['cache_dir'],
                 $cacheConfig['useCompression'] ?? true,
@@ -98,24 +104,30 @@ final class Router
             );
         }
 
-        // Create RouteDiscovery if needed
-        $discovery = null;
-        if (isset($config['discovery'])) {
-            $discoveryConfig = is_array($config['discovery']) ? $config['discovery'] : [];
-            $discovery = RouteDiscovery::create(
-                new self($container), // Temporary instance for discovery
-                $discoveryConfig
-            );
-        }
-
-        return new self(
+        // ✅ FIX: Erstelle Router erst, dann Discovery
+        $router = new self(
             container: $container,
             cacheManager: $cacheManager,
-            discovery: $discovery,
+            discovery: null, // Wird später gesetzt
             debugMode: $config['debug'] ?? false,
             allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
-            baseDomain: $config['base_domain'] ?? 'localhost'
+            baseDomain: $config['base_domain'] ?? 'localhost',
+            cacheEnabled: $cacheEnabled
         );
+
+        // ✅ FIX: Discovery mit dem ECHTEN Router erstellen
+        if ($config['auto_discover'] ?? true) {
+            $discoveryConfig = $config['discovery'] ?? [
+                'strict_mode' => false,
+                'max_depth' => 5,
+                'max_file_size' => 2097152
+            ];
+
+            $discovery = RouteDiscovery::create($router, $discoveryConfig);
+            $router->discovery = $discovery; // ✅ Discovery setzen
+        }
+
+        return $router;
     }
 
     /**
@@ -128,8 +140,8 @@ final class Router
             return $this->dispatchOriginal($request);
         }
 
-        // Production: RouterCore nur wenn optimized cache vorhanden
-        if ($this->hasOptimizedCache()) {
+        // Production: RouterCore nur wenn optimized cache vorhanden und Cache aktiviert
+        if ($this->cacheEnabled && $this->hasOptimizedCache()) {
             try {
                 return $this->getCore()->dispatch($request);
             } catch (Throwable $e) {
@@ -139,7 +151,7 @@ final class Router
             }
         }
 
-        // Fallback: Original-Methode wenn kein optimized cache
+        // Fallback: Original-Methode wenn kein optimized cache oder Cache deaktiviert
         return $this->dispatchOriginal($request);
     }
 
@@ -190,8 +202,8 @@ final class Router
 
         $this->routesCompiled = true;
 
-        // Store in cache if available
-        if ($this->cacheManager !== null && !$this->debugMode) {
+        // ✅ FIX: Store in cache nur wenn CacheManager vorhanden, Cache aktiviert und nicht im Debug-Modus
+        if ($this->cacheManager !== null && $this->cacheEnabled && !$this->debugMode) {
             $this->cacheManager->store($this->routes);
         }
     }
@@ -323,7 +335,7 @@ final class Router
      */
     public function buildCache(): void
     {
-        if ($this->cacheManager === null) {
+        if ($this->cacheManager === null || !$this->cacheEnabled) {
             return;
         }
 
@@ -501,8 +513,9 @@ final class Router
             'named_routes' => count($this->namedRoutes),
             'supported_methods' => $this->supportedMethods,
             'is_compiled' => $this->isCompiled,
+            'cache_enabled' => $this->cacheEnabled,
             'cache_available' => $this->hasOptimizedCache(),
-            'using_core' => !$this->debugMode && $this->hasOptimizedCache(),
+            'using_core' => !$this->debugMode && $this->cacheEnabled && $this->hasOptimizedCache(),
         ];
 
         // Add RouterCore stats if available
@@ -590,13 +603,15 @@ final class Router
      */
     public function warmUp(): void
     {
-        // Build cache if not exists
-        if (!$this->hasOptimizedCache()) {
+        // Build cache only if cache is enabled
+        if ($this->cacheEnabled && !$this->hasOptimizedCache()) {
             $this->buildCache();
         }
 
-        // Pre-initialize RouterCore
-        $this->getCore();
+        // Pre-initialize RouterCore only if cache is enabled
+        if ($this->cacheEnabled) {
+            $this->getCore();
+        }
     }
 
     /**
