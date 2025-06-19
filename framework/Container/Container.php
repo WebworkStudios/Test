@@ -480,17 +480,14 @@ final class Container implements ContainerInterface
     private function createLazyProxy(string $id, callable $factory): object
     {
         $initializer = fn() => $factory($this);
-
-        // ✅ PHP 8.4 native Lazy Objects nutzen
         $targetClass = $this->determineTargetClass($factory);
 
         if ($targetClass && class_exists($targetClass)) {
             $reflection = $this->getCachedReflection($targetClass);
-            // Nutze PHP 8.4 Lazy Ghost statt eigenem Proxy-System
+            // ✅ Native PHP 8.4 Lazy Ghost
             return $reflection->newLazyGhost($initializer);
         }
 
-        // Fallback für unbekannte Klassen
         return (new ReflectionClass(stdClass::class))->newLazyGhost($initializer);
     }
 
