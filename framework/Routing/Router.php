@@ -484,32 +484,11 @@ final class Router
     }
 
     /**
-     * Check if route exists
-     */
-    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
-    {
-        $this->compileRoutes();
-
-        $method = strtoupper($method);
-        $path = RequestSanitizer::sanitizePath($path);
-
-        return $this->findMatchingRoute($method, $path, $subdomain) !== null;
-    }
-
-    /**
      * Get all registered routes
      */
     public function getRoutes(): array
     {
         return $this->routes;
-    }
-
-    /**
-     * Get named routes
-     */
-    public function getNamedRoutes(): array
-    {
-        return $this->namedRoutes;
     }
 
     /**
@@ -536,6 +515,9 @@ final class Router
         if ($this->cacheManager !== null) {
             $baseStats['cache_stats'] = $this->cacheManager->getStats();
         }
+
+        // ✅ NEU: Pattern-Compiler Statistiken
+        $baseStats['pattern_compiler_stats'] = RoutePatternCompiler::getCacheStats();
 
         return $baseStats;
     }

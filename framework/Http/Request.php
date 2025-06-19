@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
-use DateMalformedStringException;
-use DateTimeImmutable;
 use framework\Http\Cache\CacheHeaders;
 use InvalidArgumentException;
 use JsonException;
@@ -404,18 +402,19 @@ final class Request
     }
 
     /**
-     * Get parameter as date with optional default
+     * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
      */
-    public function date(string $key, ?DateTimeImmutable $default = null): ?DateTimeImmutable
+    public function sanitized(string $key, string $default = ''): string
     {
         $value = $this->string($key);
+
         if ($value === '') {
             return $default;
         }
 
         try {
-            return new DateTimeImmutable($value);
-        } catch (DateMalformedStringException) {
+            return RequestSanitizer::sanitizeParameter($value, 'default');
+        } catch (InvalidArgumentException) {
             return $default;
         }
     }
@@ -439,32 +438,6 @@ final class Request
         }
 
         return $stringValue;
-    }
-
-    /**
-     * Get parameter with HTML tags stripped
-     */
-    public function stripped(string $key, string $default = ''): string
-    {
-        return $this->sanitized($key, $default); // Vereinheitlichung mit sanitized()
-    }
-
-    /**
-     * Get sanitized parameter (HTML entities, trimmed) using RequestSanitizer
-     */
-    public function sanitized(string $key, string $default = ''): string
-    {
-        $value = $this->string($key);
-
-        if ($value === '') {
-            return $default;
-        }
-
-        try {
-            return RequestSanitizer::sanitizeParameter($value, 'default');
-        } catch (InvalidArgumentException) {
-            return $default;
-        }
     }
 
     // === Input Sanitization ===
@@ -615,37 +588,6 @@ final class Request
     {
         return $this->rawBody;
     }
-
-    // === Cookies (Eager) ===
-
-    /**
-     * Erweiterte Sanitization-Methoden mit RequestSanitizer
-     */
-    public function sanitizeAll(array $types = []): array
-    {
-        $allParams = array_merge($this->query, $this->body());
-        return RequestSanitizer::sanitizeParameters($allParams, $types);
-    }
-
-    // === Raw Access ===
-
-    /**
-     * Get security report for debugging
-     */
-    public function getSecurityReport(): array
-    {
-        return [
-            'path_report' => RequestSanitizer::getSecurityReport($this->path, 'path'),
-            'uri_report' => RequestSanitizer::getSecurityReport($this->uri, 'parameter'),
-            'method' => $this->method,
-            'content_length' => $this->contentLength,
-            'is_secure' => $this->isSecure(),
-            'ip' => $this->ip(),
-            'user_agent' => substr($this->userAgent(), 0, 100) // Truncate for security
-        ];
-    }
-
-    // === Batch Sanitization ===
 
     public function ip(): string
     {

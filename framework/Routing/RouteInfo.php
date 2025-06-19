@@ -25,14 +25,8 @@ final class RouteInfo
         get => count($this->paramNames);
     }
 
-    public string $cacheKey {
-        get => $this->cachedCacheKey ??= hash('xxh3', $this->method . ':' . $this->originalPath . ':' . ($this->subdomain ?? ''));
-    }
-
-    // Performance: Cache computed values
     private ?bool $cachedIsStatic = null;
-    private ?string $cachedCacheKey = null;
-    private ?array $cachedConstraints = null;
+    private ?array $cachedCompiled = null; // ✅ NEU: Cache für kompilierte Pattern
 
     public function __construct(
         public readonly string  $method,
@@ -43,9 +37,11 @@ final class RouteInfo
         public readonly array   $middleware = [],
         public readonly ?string $name = null,
         public readonly ?string $subdomain = null,
-        public readonly array   $options = []
+        public readonly array   $options = [],
+        ?array                  $compiled = null // ✅ NEU: Optional vorkompiliert
     )
     {
+        $this->cachedCompiled = $compiled; // ✅ Cache setzen falls vorhanden
         $this->validateConstruction();
     }
 
@@ -69,7 +65,7 @@ final class RouteInfo
     }
 
     /**
-     * Fast route creation mit zentraler Pattern-Kompilierung
+     * ✅ GEÄNDERT: Nutze gecachte Kompilierung
      */
     public static function fromPath(
         string  $method,
@@ -83,7 +79,7 @@ final class RouteInfo
     {
         $method = strtoupper($method);
 
-        // Nutze zentrale Pattern-Kompilierung
+        // ✅ EINMALIGE Kompilierung hier
         $compiled = RoutePatternCompiler::compile($path);
 
         return new self(
@@ -95,12 +91,13 @@ final class RouteInfo
             $middleware,
             $name,
             $subdomain,
-            $options
+            $options,
+            $compiled // ✅ Übergebe kompilierte Daten
         );
     }
 
     /**
-     * Fast cache-friendly creation
+     * ✅ GEÄNDERT: Lade mit gecachter Kompilierung
      */
     public static function fromArray(array $data): self
     {
@@ -113,12 +110,13 @@ final class RouteInfo
             $data['middleware'] ?? [],
             $data['name'] ?? null,
             $data['subdomain'] ?? null,
-            $data['options'] ?? []
+            $data['options'] ?? [],
+            $data['compiled'] ?? null // ✅ Lade gecachte Kompilierung
         );
     }
 
     /**
-     * Sichere matches() Methode mit Fehlerbehandlung
+     * ✅ GEÄNDERT: Verwende gecachte Kompilierung
      */
     public function matches(string $method, string $path, ?string $subdomain = null): bool
     {
@@ -137,17 +135,31 @@ final class RouteInfo
             return $this->originalPath === $path;
         }
 
-        // Dynamic route pattern match with error handling
+        // ✅ OPTIMIERT: Verwende gecachte Kompilierung
+        $compiled = $this->getCompiled();
+
         try {
-            return preg_match($this->pattern, $path) === 1;
+            return preg_match($compiled['pattern'], $path) === 1;
         } catch (Throwable $e) {
-            error_log("❌ Regex error in route pattern '{$this->pattern}' for path '{$path}': " . $e->getMessage());
+            error_log("❌ Regex error in route pattern '{$compiled['pattern']}' for path '{$path}': " . $e->getMessage());
             return false;
         }
     }
 
     /**
-     * Parameter-Extraktion mit Pattern-Compiler-Validierung
+     * ✅ NEU: Lazy-Loading der Kompilierung
+     */
+    private function getCompiled(): array
+    {
+        if ($this->cachedCompiled === null) {
+            $this->cachedCompiled = RoutePatternCompiler::compile($this->originalPath);
+        }
+
+        return $this->cachedCompiled;
+    }
+
+    /**
+     * ✅ GEÄNDERT: Verwende gecachte Kompilierung für Parameter-Extraktion
      */
     public function extractParams(string $path): array
     {
@@ -156,17 +168,18 @@ final class RouteInfo
         }
 
         try {
-            if (!preg_match($this->pattern, $path, $matches)) {
+            // ✅ OPTIMIERT: Verwende gecachte Kompilierung
+            $compiled = $this->getCompiled();
+
+            if (!preg_match($compiled['pattern'], $path, $matches)) {
                 throw new InvalidArgumentException("Path does not match route pattern");
             }
 
             $params = [];
-            $compiled = RoutePatternCompiler::compile($this->originalPath);
-
             foreach ($this->paramNames as $index => $name) {
                 $value = $matches[$index + 1] ?? '';
 
-                // Nutze Pattern-Compiler für Validierung
+                // ✅ OPTIMIERT: Nutze gecachte Constraints
                 $params[$name] = RoutePatternCompiler::validateParameter(
                     $name,
                     $value,
@@ -206,7 +219,7 @@ final class RouteInfo
     }
 
     /**
-     * Lightweight serialization for cache
+     * ✅ GEÄNDERT: Cache-freundliche Serialisierung
      */
     public function toArray(): array
     {
@@ -220,7 +233,8 @@ final class RouteInfo
             'name' => $this->name,
             'subdomain' => $this->subdomain,
             'options' => $this->options,
-            'is_static' => $this->isStatic
+            'is_static' => $this->isStatic,
+            'compiled' => $this->cachedCompiled // ✅ Cache in Serialisierung
         ];
     }
 
@@ -236,50 +250,11 @@ final class RouteInfo
         return ($this->options['deprecated'] ?? false) === true;
     }
 
-    public function getCacheTtl(): int
-    {
-        return $this->options['cache_ttl'] ?? 3600;
-    }
-
     public function requiresAuth(): bool
     {
         return ($this->options['auth_required'] ?? false) === true ||
             in_array('auth', $this->middleware, true);
     }
-
-    // === Fast clone operations ===
-
-    public function withMethod(string $method): self
-    {
-        return new self(
-            strtoupper($method),
-            $this->originalPath,
-            $this->pattern,
-            $this->paramNames,
-            $this->actionClass,
-            $this->middleware,
-            $this->name,
-            $this->subdomain,
-            $this->options
-        );
-    }
-
-    public function withMiddleware(array $additionalMiddleware): self
-    {
-        return new self(
-            $this->method,
-            $this->originalPath,
-            $this->pattern,
-            $this->paramNames,
-            $this->actionClass,
-            [...$this->middleware, ...$additionalMiddleware],
-            $this->name,
-            $this->subdomain,
-            $this->options
-        );
-    }
-
-    // === Debugging ===
 
     public function __debugInfo(): array
     {
@@ -289,7 +264,7 @@ final class RouteInfo
             'action' => $this->actionClass,
             'is_static' => $this->isStatic,
             'parameter_count' => $this->parameterCount,
-            'cache_key' => $this->cacheKey
+            'has_compiled_cache' => $this->cachedCompiled !== null // ✅ Debug-Info
         ];
     }
 

@@ -12,7 +12,6 @@ use RecursiveDirectoryIterator;
 use RecursiveIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
-use ReflectionException;
 use RuntimeException;
 use SplFileInfo;
 use Throwable;
@@ -75,45 +74,6 @@ final class RouteDiscovery
     {
         $scanner = new RouteFileScanner($config);
         return new self($router, $scanner, config: $config);
-    }
-
-    /**
-     * ✅ OPTIMIZED: Fast attribute check with caching
-     */
-    public function hasRouteAttributes(string $className): bool
-    {
-        // Check cache first
-        if (isset($this->classCache[$className])) {
-            return $this->classCache[$className];
-        }
-
-        if (!class_exists($className)) {
-            return $this->cacheResult($className, false);
-        }
-
-        try {
-            $reflection = new ReflectionClass($className);
-            $hasRoutes = !empty($reflection->getAttributes(Route::class));
-            return $this->cacheResult($className, $hasRoutes);
-        } catch (ReflectionException) {
-            return $this->cacheResult($className, false);
-        }
-    }
-
-    /**
-     * ✅ OPTIMIZED: LRU cache with size limit
-     */
-    private function cacheResult(string $className, bool $result): bool
-    {
-        // Implement simple LRU
-        if (count($this->classCache) >= self::MAX_CACHE_SIZE) {
-            // Remove first (oldest) entry
-            $oldestKey = array_key_first($this->classCache);
-            unset($this->classCache[$oldestKey]);
-        }
-
-        $this->classCache[$className] = $result;
-        return $result;
     }
 
     /**
@@ -355,6 +315,22 @@ final class RouteDiscovery
     }
 
     /**
+     * ✅ OPTIMIZED: LRU cache with size limit
+     */
+    private function cacheResult(string $className, bool $result): bool
+    {
+        // Implement simple LRU
+        if (count($this->classCache) >= self::MAX_CACHE_SIZE) {
+            // Remove first (oldest) entry
+            $oldestKey = array_key_first($this->classCache);
+            unset($this->classCache[$oldestKey]);
+        }
+
+        $this->classCache[$className] = $result;
+        return $result;
+    }
+
+    /**
      * ✅ OPTIMIZED: Route attribute processing
      */
     private function processRouteAttributes(ReflectionClass $reflection): bool
@@ -468,22 +444,6 @@ final class RouteDiscovery
         if (count($filePaths) > 500) { // Increased limit
             throw new InvalidArgumentException('Too many files to scan (max 500)');
         }
-    }
-
-    /**
-     * Get discovered routes summary
-     */
-    public function getDiscoveredRoutes(): array
-    {
-        return [
-            'total_routes' => $this->discoveredRoutes,
-            'routes_per_file' => $this->processedFiles > 0
-                ? round($this->discoveredRoutes / $this->processedFiles, 2)
-                : 0,
-            'successful_classes' => count(array_filter($this->classCache)),
-            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
-            'success_rate' => round($this->successRate, 1)
-        ];
     }
 
     /**

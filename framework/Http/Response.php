@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Framework\Http;
 
-use DateTimeImmutable;
 use DateTimeInterface;
-use framework\Http\Cache\CacheHeaders;
 use framework\Http\Cache\Cookie;
 use InvalidArgumentException;
 use RuntimeException;
@@ -35,19 +33,21 @@ final class Response
     public const int STATUS_NOT_IMPLEMENTED = 501;
     public const int STATUS_BAD_GATEWAY = 502;
     public const int STATUS_SERVICE_UNAVAILABLE = 503;
+
+    // Property Hooks for better API
     public private(set) string $body {
         set(string $value) {
             $this->body = $value;
         }
     }
 
-    // Property Hooks for better API
     public private(set) int $status {
         set(int $value) {
             $this->validateStatus($value);
             $this->status = $value;
         }
     }
+
     private array $cookies = [];
 
     /**
@@ -218,28 +218,6 @@ final class Response
         return self::json(
             ['error' => $message],
             self::STATUS_INTERNAL_SERVER_ERROR
-        );
-    }
-
-    /**
-     * Create cached response with ETag and Last-Modified headers
-     */
-    public static function cached(
-        string            $content,
-        string            $etag,
-        DateTimeImmutable $lastModified,
-        int               $maxAge = 3600,
-        bool              $public = true,
-        string            $contentType = 'text/html; charset=utf-8'
-    ): self
-    {
-        $cacheHeaders = CacheHeaders::forResponse($etag, $lastModified, $maxAge, $public);
-        $cacheHeaders['Content-Type'] = $contentType;
-
-        return new self(
-            $content,
-            self::STATUS_OK,
-            Headers::fromArray($cacheHeaders)
         );
     }
 
@@ -520,18 +498,5 @@ final class Response
     public function getContentType(): string
     {
         return $this->headers->get('content-type') ?? 'text/html';
-    }
-
-    /**
-     * Convert response to array (useful for testing/debugging)
-     */
-    public function toArray(): array
-    {
-        return [
-            'status' => $this->status,
-            'headers' => $this->headers->all(),
-            'cookies' => array_map(fn($cookie) => $cookie->toHeaderValue(), $this->cookies),
-            'body' => $this->body
-        ];
     }
 }

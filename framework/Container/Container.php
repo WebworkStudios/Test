@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Framework\Container;
 
 use Framework\Container\Attributes\{Config, Inject};
+use Framework\Http\RequestSanitizer;
 use ReflectionAttribute;
 use ReflectionClass;
 use ReflectionException;
@@ -51,19 +52,13 @@ final class Container implements ContainerInterface
 
     // Security & Config
     private bool $compiled = false;
-    private readonly SecurityValidator $securityValidator;
 
     public function __construct(
-        array $config = [],
-        array $allowedPaths = []
+        array $config = []
     )
     {
         $this->config = $config;
         $this->reflectionCache = new WeakMap();
-        $this->securityValidator = new SecurityValidator(
-            strictMode: true,
-            allowedPaths: $allowedPaths ?: [getcwd()]
-        );
 
         // Self-registration
         $this->instance(self::class, $this);
@@ -76,7 +71,7 @@ final class Container implements ContainerInterface
      */
     public function instance(string $id, object $instance): static
     {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
+        if (!RequestSanitizer::isSecureClassName($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -102,7 +97,7 @@ final class Container implements ContainerInterface
      */
     public function bind(string $id, mixed $concrete = null, bool $singleton = false): static
     {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
+        if (!RequestSanitizer::isSecureClassName($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -120,7 +115,7 @@ final class Container implements ContainerInterface
      */
     public function lazy(string $id, callable $factory, bool $singleton = true): static
     {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
+        if (!RequestSanitizer::isSecureClassName($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -143,7 +138,7 @@ final class Container implements ContainerInterface
      */
     public function tag(string $id, string $tag): static
     {
-        if (!$this->securityValidator->isServiceIdSafe($tag)) {
+        if (!RequestSanitizer::isSecureClassName($tag)) {
             throw ContainerException::invalidService($tag, 'Invalid tag format');
         }
 
@@ -248,7 +243,7 @@ final class Container implements ContainerInterface
      */
     public function resolve(string $id, ?string $context = null): mixed
     {
-        if (!$this->securityValidator->isServiceIdSafe($id)) {
+        if (!RequestSanitizer::isSecureClassName($id)) {
             throw ContainerException::invalidService($id, 'Invalid service ID format');
         }
 
@@ -292,8 +287,6 @@ final class Container implements ContainerInterface
         return $this->build($concrete);
     }
 
-    // === PUBLIC API ===
-
     /**
      * Build instance mit optimierter Reflection
      */
@@ -308,11 +301,11 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Optimierte Klassen-Instanziierung
+     * ✅ GEÄNDERT: Nutzt RequestSanitizer statt SecurityValidator
      */
     private function buildClass(string $className): object
     {
-        if (!$this->securityValidator->isClassNameSafe($className)) {
+        if (!RequestSanitizer::isSecureClassName($className)) {
             throw ContainerException::securityViolation($className, 'Unsafe class name');
         }
 
@@ -325,8 +318,8 @@ final class Container implements ContainerInterface
             );
         }
 
-        // Security check
-        if (!$this->securityValidator->isClassSecure($reflection)) {
+        // ✅ VEREINFACHT: Basis-Sicherheitscheck
+        if ($this->hasSecurityRisks($reflection)) {
             throw ContainerException::securityViolation($className, 'Class has security risks');
         }
 
@@ -359,6 +352,27 @@ final class Container implements ContainerInterface
         } catch (ReflectionException $e) {
             throw ContainerException::cannotResolve($className, 'Class does not exist');
         }
+    }
+
+    /**
+     * ✅ NEU: Vereinfachte Sicherheitsprüfung
+     */
+    private function hasSecurityRisks(ReflectionClass $reflection): bool
+    {
+        // Nur essenzielle Sicherheitschecks
+        if ($reflection->isInternal()) {
+            return true;
+        }
+
+        // Prüfe gefährliche Methoden
+        $dangerousMethods = ['eval', 'exec', 'system', 'shell_exec'];
+        foreach ($dangerousMethods as $dangerous) {
+            if ($reflection->hasMethod($dangerous)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -565,8 +579,6 @@ final class Container implements ContainerInterface
         return null; // Für komplexere Fälle verwenden wir Generic Proxy
     }
 
-    // === ContainerInterface Implementation ===
-
     /**
      * Optimierte Standard-Auflösung
      */
@@ -601,8 +613,6 @@ final class Container implements ContainerInterface
         return $this->registry['meta'][$id]['singleton'] ?? false;
     }
 
-    // === Private Helper Methods ===
-
     public function has(string $id): bool
     {
         return $this->isRegistered($id);
@@ -633,7 +643,7 @@ final class Container implements ContainerInterface
             'service_count' => $this->serviceCount,
             'is_compiled' => $this->isCompiled,
             'memory_usage' => memory_get_usage(true),
-            'has_security_validator' => true
+            'has_request_sanitizer' => true
         ];
     }
 

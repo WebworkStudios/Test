@@ -163,12 +163,76 @@ final class RouteFileScanner
     }
 
     /**
-     * ✅ OPTIMIZED: Fast route detection
+     * ✅ OPTIMIZED: Batch file scanning
      */
-    public function fileHasRoutes(string $filePath): bool
+    public function scanFiles(array $filePaths): array
+    {
+        $allClasses = [];
+
+        // Process in batches for better memory management
+        $batches = array_chunk($filePaths, 20);
+
+        foreach ($batches as $batch) {
+            foreach ($batch as $filePath) {
+                $classes = $this->scanFile($filePath);
+                $allClasses = array_merge($allClasses, $classes);
+            }
+
+            // Cleanup memory periodically
+            if (count($allClasses) > 100) {
+                gc_collect_cycles();
+            }
+        }
+
+        return array_unique($allClasses);
+    }
+
+    /**
+     * ✅ OPTIMIZED: Smart file scanning with caching
+     */
+    public function scanFile(string $filePath): array
+    {
+        $this->totalFiles++;
+
+        $cacheKey = 'scan_' . md5($filePath);
+        $mtime = filemtime($filePath);
+
+        // Check cache first
+        if (isset($this->fileCache[$cacheKey])) {
+            $cached = $this->fileCache[$cacheKey];
+            if ($cached['mtime'] === $mtime) {
+                $this->cacheHits++;
+                return $cached['classes'];
+            }
+        }
+
+        $classes = $this->performFileScan($filePath);
+
+        // Cache result
+        $this->cacheResult($cacheKey, [
+            'classes' => $classes,
+            'mtime' => $mtime
+        ]);
+
+        return $classes;
+    }
+
+    /**
+     * ✅ OPTIMIZED: Streamlined file scanning
+     */
+    private function performFileScan(string $filePath): array
     {
         $content = $this->readFileWithCache($filePath);
-        return $content !== null && $this->hasRouteAttributes($content);
+        if ($content === null) {
+            return [];
+        }
+
+        // Fast pre-screening
+        if (!$this->hasRouteAttributes($content)) {
+            return [];
+        }
+
+        return $this->extractClassNames($content);
     }
 
     /**
@@ -262,79 +326,6 @@ final class RouteFileScanner
 
         // ✅ Quick pattern match
         return preg_match($this->patterns['route_quick_check'], $content) === 1;
-    }
-
-    /**
-     * ✅ OPTIMIZED: Batch file scanning
-     */
-    public function scanFiles(array $filePaths): array
-    {
-        $allClasses = [];
-
-        // Process in batches for better memory management
-        $batches = array_chunk($filePaths, 20);
-
-        foreach ($batches as $batch) {
-            foreach ($batch as $filePath) {
-                $classes = $this->scanFile($filePath);
-                $allClasses = array_merge($allClasses, $classes);
-            }
-
-            // Cleanup memory periodically
-            if (count($allClasses) > 100) {
-                gc_collect_cycles();
-            }
-        }
-
-        return array_unique($allClasses);
-    }
-
-    /**
-     * ✅ OPTIMIZED: Smart file scanning with caching
-     */
-    public function scanFile(string $filePath): array
-    {
-        $this->totalFiles++;
-
-        $cacheKey = 'scan_' . md5($filePath);
-        $mtime = filemtime($filePath);
-
-        // Check cache first
-        if (isset($this->fileCache[$cacheKey])) {
-            $cached = $this->fileCache[$cacheKey];
-            if ($cached['mtime'] === $mtime) {
-                $this->cacheHits++;
-                return $cached['classes'];
-            }
-        }
-
-        $classes = $this->performFileScan($filePath);
-
-        // Cache result
-        $this->cacheResult($cacheKey, [
-            'classes' => $classes,
-            'mtime' => $mtime
-        ]);
-
-        return $classes;
-    }
-
-    /**
-     * ✅ OPTIMIZED: Streamlined file scanning
-     */
-    private function performFileScan(string $filePath): array
-    {
-        $content = $this->readFileWithCache($filePath);
-        if ($content === null) {
-            return [];
-        }
-
-        // Fast pre-screening
-        if (!$this->hasRouteAttributes($content)) {
-            return [];
-        }
-
-        return $this->extractClassNames($content);
     }
 
     /**
@@ -436,24 +427,8 @@ final class RouteFileScanner
             'cache_hit_ratio' => $this->cacheHitRatio . '%',
             'cached_files' => count($this->fileCache),
             'cached_content' => count($this->contentCache),
-            'max_file_size' => $this->formatBytes($this->maxFileSize),
             'strict_mode' => $this->strictMode,
         ];
     }
 
-    /**
-     * Format bytes for human reading
-     */
-    private function formatBytes(int $bytes): string
-    {
-        $units = ['B', 'KB', 'MB'];
-        $unitIndex = 0;
-
-        while ($bytes >= 1024 && $unitIndex < count($units) - 1) {
-            $bytes /= 1024;
-            $unitIndex++;
-        }
-
-        return round($bytes, 2) . ' ' . $units[$unitIndex];
-    }
 }
