@@ -12,7 +12,7 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Optimized Router with RouterCore delegation for performance
+ * Optimized Router with RouteCacheManager integration
  */
 final class Router
 {
@@ -40,7 +40,7 @@ final class Router
 
     public function __construct(
         private readonly ContainerInterface $container,
-        private readonly ?RouteCache        $cache = null,
+        private readonly ?RouteCacheManager $cacheManager = null,
         private readonly ?RouteDiscovery    $discovery = null,
         private readonly bool               $debugMode = false,
         private readonly array              $allowedSubdomains = ['api', 'admin', 'www'],
@@ -51,21 +51,55 @@ final class Router
     }
 
     /**
-     * Load cached routes using RouteCacheBuilder
+     * Create router with default configuration
+     */
+    public static function create(ContainerInterface $container, array $config = []): self
+    {
+        // Create RouteCacheManager if cache directory specified
+        $cacheManager = null;
+        if (isset($config['cache_dir'])) {
+            $cacheConfig = $config['cache'] ?? [];
+            $cacheManager = new RouteCacheManager(
+                $config['cache_dir'],
+                $cacheConfig['useCompression'] ?? true,
+                $cacheConfig['compressionLevel'] ?? 6,
+                $cacheConfig['integrityCheck'] ?? true
+            );
+        }
+
+        // Create RouteDiscovery if needed
+        $discovery = null;
+        if (isset($config['discovery'])) {
+            $discoveryConfig = is_array($config['discovery']) ? $config['discovery'] : [];
+            $discovery = RouteDiscovery::create(
+                new self($container), // Temporary instance for discovery
+                $discoveryConfig
+            );
+        }
+
+        return new self(
+            container: $container,
+            cacheManager: $cacheManager,
+            discovery: $discovery,
+            debugMode: $config['debug'] ?? false,
+            allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+            baseDomain: $config['base_domain'] ?? 'localhost'
+        );
+    }
+
+    /**
+     * Load cached routes using RouteCacheManager
      */
     private function loadCachedRoutes(): void
     {
-        if ($this->cache === null || $this->debugMode) {
+        if ($this->cacheManager === null || $this->debugMode) {
             return;
         }
 
-        // Nutze RouteCacheBuilder statt eigene Logik
-        if (RouteCacheBuilder::validateCache()) {
-            $cached = $this->cache->load();
-            if ($cached !== null) {
-                $this->routes = $cached;
-                $this->rebuildNamedRoutes();
-            }
+        $cached = $this->cacheManager->load();
+        if ($cached !== null) {
+            $this->routes = $cached;
+            $this->rebuildNamedRoutes();
         }
     }
 
@@ -85,42 +119,7 @@ final class Router
     }
 
     /**
-     * Create router with default configuration
-     */
-    public static function create(ContainerInterface $container, array $config = []): self
-    {
-        // Sicherstellen, dass $config['cache'] ein Array ist
-        $cacheConfig = $config['cache'] ?? [];
-        if (!is_array($cacheConfig)) {
-            $cacheConfig = [];
-        }
-
-        $cache = isset($config['cache_dir'])
-            ? new RouteCache($config['cache_dir'], ...$cacheConfig)
-            : null;
-
-        // Sicherstellen, dass $config['discovery'] ein Array ist
-        $discoveryConfig = $config['discovery'] ?? [];
-        if (!is_array($discoveryConfig)) {
-            $discoveryConfig = [];
-        }
-
-        $discovery = isset($config['discovery'])
-            ? RouteDiscovery::create(new self($container), $discoveryConfig)
-            : null;
-
-        return new self(
-            container: $container,
-            cache: $cache,
-            discovery: $discovery,
-            debugMode: $config['debug'] ?? false,
-            allowedSubdomains: $config['allowed_subdomains'] ?? ['api', 'admin', 'www'],
-            baseDomain: $config['base_domain'] ?? 'localhost'
-        );
-    }
-
-    /**
-     * High-Performance dispatch - delegates to RouterCore only when safe
+     * High-Performance dispatch - delegates to RouterCore when available
      */
     public function dispatch(Request $request): Response
     {
@@ -129,20 +128,18 @@ final class Router
             return $this->dispatchOriginal($request);
         }
 
-        // Production: RouterCore nur wenn gültiger Cache vorhanden
-        if ($this->hasCompiledRoutes()) {
+        // Production: RouterCore nur wenn optimized cache vorhanden
+        if ($this->hasOptimizedCache()) {
             try {
                 return $this->getCore()->dispatch($request);
             } catch (Throwable $e) {
                 // Fallback bei RouterCore-Fehlern
-                if ($this->debugMode) {
-                    error_log("RouterCore failed, falling back to original: " . $e->getMessage());
-                }
+                error_log("RouterCore failed, falling back to original: " . $e->getMessage());
                 return $this->dispatchOriginal($request);
             }
         }
 
-        // Fallback: Original-Methode wenn kein Cache verfügbar
+        // Fallback: Original-Methode wenn kein optimized cache
         return $this->dispatchOriginal($request);
     }
 
@@ -179,7 +176,6 @@ final class Router
      */
     private function validateRequest(Request $request): void
     {
-        // Umfassende Validierung durch RequestSanitizer
         RequestSanitizer::validateRequest($request);
     }
 
@@ -195,8 +191,8 @@ final class Router
         $this->routesCompiled = true;
 
         // Store in cache if available
-        if ($this->cache !== null && !$this->debugMode) {
-            $this->cache->store($this->routes);
+        if ($this->cacheManager !== null && !$this->debugMode) {
+            $this->cacheManager->store($this->routes);
         }
     }
 
@@ -276,11 +272,11 @@ final class Router
     }
 
     /**
-     * Check if we have compiled routes available
+     * Check if we have optimized cache available
      */
-    private function hasCompiledRoutes(): bool
+    private function hasOptimizedCache(): bool
     {
-        return RouteCacheBuilder::validateCache();
+        return $this->cacheManager?->isValid ?? false;
     }
 
     /**
@@ -292,8 +288,7 @@ final class Router
             $this->core = new RouterCore(
                 $this->container,
                 $this->debugMode,
-                $this->allowedSubdomains,
-                $this->baseDomain
+                $this->allowedSubdomains
             );
         }
 
@@ -301,7 +296,7 @@ final class Router
     }
 
     /**
-     * Auto-discover routes - Vereinfacht ohne doppelte Implementierung
+     * Auto-discover routes in specified directories
      */
     public function autoDiscoverRoutes(array $directories = []): void
     {
@@ -324,12 +319,15 @@ final class Router
     }
 
     /**
-     * Build route cache for production performance - Delegiert an RouteCacheBuilder
+     * Build route cache for production performance
      */
     public function buildCache(): void
     {
-        // Delegiere komplett an RouteCacheBuilder
-        RouteCacheBuilder::buildFromRouter($this);
+        if ($this->cacheManager === null) {
+            return;
+        }
+
+        $this->cacheManager->store($this->routes);
 
         // Clear RouterCore cache to force reload
         if ($this->core !== null) {
@@ -353,7 +351,7 @@ final class Router
         $this->validateMiddleware($middleware);
         $this->validateRouteName($name);
 
-        // Create route info
+        // Create route info using RoutePatternCompiler
         $routeInfo = RouteInfo::fromPath(
             strtoupper($method),
             $path,
@@ -494,7 +492,7 @@ final class Router
     }
 
     /**
-     * Get router statistics including RouterCore stats
+     * Get router statistics including cache stats
      */
     public function getStats(): array
     {
@@ -503,8 +501,8 @@ final class Router
             'named_routes' => count($this->namedRoutes),
             'supported_methods' => $this->supportedMethods,
             'is_compiled' => $this->isCompiled,
-            'cache_available' => $this->hasCompiledRoutes(),
-            'using_core' => !$this->debugMode && $this->hasCompiledRoutes(),
+            'cache_available' => $this->hasOptimizedCache(),
+            'using_core' => !$this->debugMode && $this->hasOptimizedCache(),
         ];
 
         // Add RouterCore stats if available
@@ -513,9 +511,8 @@ final class Router
         }
 
         // Add cache stats if available
-        $cacheStats = RouteCacheBuilder::getCacheStats();
-        if ($cacheStats !== null) {
-            $baseStats['cache_stats'] = $cacheStats;
+        if ($this->cacheManager !== null) {
+            $baseStats['cache_stats'] = $this->cacheManager->getStats();
         }
 
         return $baseStats;
@@ -594,7 +591,7 @@ final class Router
     public function warmUp(): void
     {
         // Build cache if not exists
-        if (!$this->hasCompiledRoutes()) {
+        if (!$this->hasOptimizedCache()) {
             $this->buildCache();
         }
 
@@ -607,8 +604,7 @@ final class Router
      */
     public function clearCaches(): void
     {
-        $this->cache?->clear();
-        RouteCacheBuilder::clearCache();
+        $this->cacheManager?->clear();
 
         if ($this->core !== null) {
             RouterCore::clearCache();
