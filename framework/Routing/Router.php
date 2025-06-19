@@ -13,6 +13,7 @@ use Throwable;
 
 /**
  * Optimized Router with RouteCacheManager integration
+ * ✅ PHP 8.4 kompatibel mit Property Hooks
  */
 final class Router
 {
@@ -83,7 +84,6 @@ final class Router
             }
         }
     }
-
 
     /**
      * Create router with default configuration
@@ -166,6 +166,7 @@ final class Router
 
     /**
      * Original dispatch method for debug/development
+     * ✅ KORRIGIERT: Property Hooks Syntax
      */
     private function dispatchOriginal(Request $request): Response
     {
@@ -174,7 +175,10 @@ final class Router
 
         $method = strtoupper($request->method);
         $path = RequestSanitizer::sanitizePath($request->path);
-        $subdomain = RequestSanitizer::extractSubdomain($request->host(), $this->allowedSubdomains);
+
+        // ✅ KORRIGIERT: Property statt Methode
+        $subdomain = RequestSanitizer::extractSubdomain($request->host, $this->allowedSubdomains);
+        //                                                           ^^^^ Property
 
         // Debug logging nur im Debug-Mode
         if ($this->debugMode && str_contains($path, 'user')) {
@@ -492,6 +496,25 @@ final class Router
     }
 
     /**
+     * Get named routes
+     */
+    public function getNamedRoutes(): array
+    {
+        return $this->namedRoutes;
+    }
+
+    /**
+     * Check if route exists
+     */
+    public function hasRoute(string $method, string $path, ?string $subdomain = null): bool
+    {
+        $method = strtoupper($method);
+        $sanitizedPath = RequestSanitizer::sanitizePath($path);
+
+        return $this->findMatchingRoute($method, $sanitizedPath, $subdomain) !== null;
+    }
+
+    /**
      * Get router statistics including cache stats
      */
     public function getStats(): array
@@ -524,6 +547,7 @@ final class Router
 
     /**
      * Debug route matching for development
+     * ✅ KORRIGIERT: Property Hooks Syntax
      */
     public function debugRoute(string $method, string $path, ?string $subdomain = null): array
     {

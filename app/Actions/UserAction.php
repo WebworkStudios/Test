@@ -147,7 +147,7 @@ final class UserAction
                             <span class="param-value">' . htmlspecialchars($request->uri) . '</span>
                             
                             <span class="param-label">User Agent:</span>
-                            <span class="param-value">' . htmlspecialchars($request->userAgent()) . '</span>
+                            <span class="param-value">' . htmlspecialchars($request->userAgent) . '</span>
                         </div>
                     </div>
                     

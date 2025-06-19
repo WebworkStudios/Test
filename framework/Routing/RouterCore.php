@@ -1,6 +1,5 @@
 <?php
 
-
 declare(strict_types=1);
 
 namespace Framework\Routing;
@@ -13,6 +12,7 @@ use Throwable;
 
 /**
  * High-Performance Router Core - O(1) static route lookup
+ * ✅ PHP 8.4 kompatibel mit Property Hooks
  */
 final class RouterCore
 {
@@ -48,6 +48,7 @@ final class RouterCore
 
     /**
      * Ultra-fast dispatch - O(1) for static routes
+     * ✅ KORRIGIERT: Property Hooks Syntax
      */
     public function dispatch(Request $request): Response
     {
@@ -59,7 +60,10 @@ final class RouterCore
 
             $method = strtoupper($request->method);
             $path = RequestSanitizer::sanitizePath($request->path);
-            $subdomain = RequestSanitizer::extractSubdomain($request->host(), $this->allowedSubdomains);
+
+            // ✅ KORRIGIERT: Property statt Methode
+            $subdomain = RequestSanitizer::extractSubdomain($request->host, $this->allowedSubdomains);
+            //                                                           ^^^^ Property
 
             // ✅ O(1) Static Route Lookup
             $staticKey = $subdomain ? "{$subdomain}:{$path}" : $path;
@@ -110,7 +114,6 @@ final class RouterCore
             self::$dynamicRoutes = [];
         }
     }
-
 
     /**
      * Call action class

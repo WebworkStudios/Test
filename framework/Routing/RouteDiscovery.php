@@ -17,21 +17,25 @@ use SplFileInfo;
 use Throwable;
 
 /**
- * ✅ OPTIMIZED: Route discovery with batching and memory management
+ * ✅ OPTIMIZED: Route discovery mit PHP 8.4 Features, batching und memory management
  */
 final class RouteDiscovery
 {
     // PHP 8.4 Property Hooks for computed properties
     private const int MAX_CACHE_SIZE = 200;
+
     public int $maxDepth {
         get => $this->config['max_depth'] ?? 10;
     }
+
     public bool $strictMode {
         get => $this->config['strict_mode'] ?? false; // ✅ Default false for better compatibility
     }
+
     public int $processedFiles {
         get => $this->processedFiles;
     }
+
     public int $discoveredRoutes {
         get => $this->discoveredRoutes;
     }
@@ -42,6 +46,7 @@ final class RouteDiscovery
             ? (count(array_filter($this->classCache)) / count($this->classCache)) * 100
             : 0.0;
     }
+
     private array $classCache = []; // Reduced from unlimited
 
     public function __construct(
@@ -58,7 +63,7 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Lightweight validation
+     * ✅ OPTIMIZED: Lightweight validation mit PHP 8.4
      */
     private function validateConfiguration(): void
     {
@@ -96,7 +101,7 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Auto-discover with better defaults
+     * ✅ OPTIMIZED: Auto-discover mit PHP 8.4 Array-Funktionen
      */
     public function autoDiscover(): void
     {
@@ -105,27 +110,35 @@ final class RouteDiscovery
             'app/Controllers'
         ];
 
-        $existingPaths = array_filter($defaultPaths, function ($path) {
-            return is_dir($path) && is_readable($path);
-        });
-
-        if (empty($existingPaths)) {
+        // ✅ PHP 8.4: Prüfe ob mindestens ein Pfad existiert
+        if (!array_any($defaultPaths, fn($path) => is_dir($path) && is_readable($path))) {
             if (!$this->strictMode) {
                 return; // Graceful failure in non-strict mode
             }
             throw new RuntimeException('No valid discovery paths found');
         }
 
+        // ✅ PHP 8.4: Filtere gültige Pfade effizienter
+        $existingPaths = array_filter($defaultPaths, fn($path) => is_dir($path) && is_readable($path));
+
         $this->discover($existingPaths);
     }
 
     /**
-     * ✅ OPTIMIZED: Discover with better error handling
+     * ✅ OPTIMIZED: Discover mit PHP 8.4 Verbesserungen
      */
     public function discover(array $directories): void
     {
         $this->validateDirectories($directories);
         $this->resetCounters();
+
+        // ✅ PHP 8.4: Elegante Validierung aller Verzeichnisse
+        if (!array_any($directories, fn($dir) => is_dir($dir) && is_readable($dir))) {
+            if ($this->strictMode) {
+                throw new RuntimeException('No accessible directories found');
+            }
+            return;
+        }
 
         foreach ($directories as $directory) {
             try {
@@ -145,7 +158,7 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Streamlined directory validation
+     * ✅ OPTIMIZED: Streamlined directory validation mit PHP 8.4
      */
     private function validateDirectories(array $directories): void
     {
@@ -155,6 +168,25 @@ final class RouteDiscovery
 
         if (count($directories) > 50) { // Increased limit
             throw new InvalidArgumentException('Too many directories to scan (max 50)');
+        }
+
+        // ✅ PHP 8.4: Elegante Validierung aller Pfade
+        if (!array_all($directories, 'is_string')) {
+            throw new InvalidArgumentException('All directory paths must be strings');
+        }
+
+        // ✅ PHP 8.4: Prüfe auf zu lange Pfade
+        $tooLongPath = array_find($directories, fn($dir) => strlen($dir) > 500);
+        if ($tooLongPath !== null) {
+            throw new InvalidArgumentException("Directory path too long: {$tooLongPath}");
+        }
+
+        // ✅ PHP 8.4: Prüfe auf gefährliche Zeichen
+        $dangerousPath = array_find($directories, fn($dir) =>
+            str_contains($dir, "\0") || str_contains($dir, '..')
+        );
+        if ($dangerousPath !== null) {
+            throw new InvalidArgumentException("Directory path contains invalid characters: {$dangerousPath}");
         }
     }
 
@@ -187,13 +219,19 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Faster glob processing
+     * ✅ OPTIMIZED: Faster glob processing mit PHP 8.4
      */
     private function processGlobPattern(string $pattern): void
     {
         $matches = glob($pattern, GLOB_ONLYDIR | GLOB_NOSORT);
         if ($matches === false) {
             return;
+        }
+
+        // ✅ PHP 8.4: Finde erstes gültiges Verzeichnis
+        $firstValid = array_find($matches, fn($match) => is_dir($match) && is_readable($match));
+        if ($firstValid === null && $this->strictMode) {
+            throw new RuntimeException("No valid directories found in pattern: {$pattern}");
         }
 
         // Limit and sort for predictable results
@@ -397,7 +435,7 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Pattern discovery with limits
+     * ✅ OPTIMIZED: Pattern discovery with limits and PHP 8.4
      */
     public function discoverWithPattern(string $baseDir, string $pattern = '**/*{Action,Controller}.php'): void
     {
@@ -412,18 +450,40 @@ final class RouteDiscovery
             throw new RuntimeException("Failed to execute glob pattern: {$fullPattern}");
         }
 
+        // ✅ PHP 8.4: Finde erstes PHP-File mit Routes
+        $hasRouteFiles = array_any($files, fn($file) =>
+            str_ends_with($file, '.php') && $this->hasRouteAttributes($file)
+        );
+
+        if (!$hasRouteFiles && $this->strictMode) {
+            throw new RuntimeException("No route files found with pattern: {$fullPattern}");
+        }
+
         // Limit file count
         $files = array_slice($files, 0, 500);
         $this->discoverInFiles($files);
     }
 
     /**
-     * ✅ OPTIMIZED: File discovery with validation
+     * ✅ OPTIMIZED: File discovery with validation and PHP 8.4
      */
     public function discoverInFiles(array $filePaths): void
     {
         $this->validateFilePaths($filePaths);
         $this->resetCounters();
+
+        // ✅ PHP 8.4: Validiere alle Dateipfade elegant
+        if (!array_all($filePaths, fn($path) => is_string($path) && str_ends_with($path, '.php'))) {
+            throw new InvalidArgumentException('All file paths must be PHP files');
+        }
+
+        // ✅ PHP 8.4: Prüfe ob mindestens eine Datei existiert
+        if (!array_any($filePaths, 'file_exists')) {
+            if ($this->strictMode) {
+                throw new RuntimeException('No existing files found');
+            }
+            return;
+        }
 
         // Process in smaller batches
         $batches = array_chunk($filePaths, 50);
@@ -433,7 +493,7 @@ final class RouteDiscovery
     }
 
     /**
-     * ✅ OPTIMIZED: Streamlined file path validation
+     * ✅ OPTIMIZED: Streamlined file path validation mit PHP 8.4
      */
     private function validateFilePaths(array $filePaths): void
     {
@@ -444,6 +504,59 @@ final class RouteDiscovery
         if (count($filePaths) > 500) { // Increased limit
             throw new InvalidArgumentException('Too many files to scan (max 500)');
         }
+
+        // ✅ PHP 8.4: Prüfe auf ungültige Pfade
+        $invalidPath = array_find($filePaths, fn($path) =>
+            !is_string($path) ||
+            strlen($path) > 500 ||
+            str_contains($path, "\0") ||
+            str_contains($path, '..')
+        );
+
+        if ($invalidPath !== null) {
+            throw new InvalidArgumentException("Invalid file path: {$invalidPath}");
+        }
+    }
+
+    /**
+     * ✅ PHP 8.4: Neue Hilfsmethoden mit Array-Funktionen
+     */
+
+    /**
+     * Finde erstes Verzeichnis mit Route-Dateien
+     */
+    public function findDirectoryWithRoutes(array $directories): ?string
+    {
+        return array_find($directories, function($dir) {
+            if (!is_dir($dir)) return false;
+
+            $phpFiles = glob($dir . '/*.php') ?: [];
+            return array_any($phpFiles, fn($file) => $this->hasRouteAttributes($file));
+        });
+    }
+
+    /**
+     * Prüfe ob alle Verzeichnisse Route-Dateien haben
+     */
+    public function allDirectoriesHaveRoutes(array $directories): bool
+    {
+        return array_all($directories, function($dir) {
+            if (!is_dir($dir)) return false;
+
+            $phpFiles = glob($dir . '/*.php') ?: [];
+            return array_any($phpFiles, fn($file) => $this->hasRouteAttributes($file));
+        });
+    }
+
+    /**
+     * Finde erste gültige Klasse
+     */
+    public function findFirstValidClass(array $classes): ?string
+    {
+        return array_find($classes, fn($class) =>
+            class_exists($class) &&
+            $this->scanner->validateClass($class)
+        );
     }
 
     /**
@@ -465,15 +578,52 @@ final class RouteDiscovery
     }
 
     /**
-     * Magic method for debugging
+     * Get discovered services summary
      */
+    public function getDiscoveredServices(): array
+    {
+        return [
+            'total_services' => $this->discoveredRoutes,
+            'services_per_file' => $this->processedFiles > 0
+                ? round($this->discoveredRoutes / $this->processedFiles, 2)
+                : 0,
+            'successful_classes' => count(array_filter($this->classCache)),
+            'failed_classes' => count(array_filter($this->classCache, fn($success) => !$success)),
+            'success_rate' => $this->successRate
+        ];
+    }
+
+    /**
+     * ✅ Prüfe ob Datei Route-Attribute enthält (ersetzt fileHasRoutes)
+     */
+    private function hasRouteAttributes(string $filePath): bool
+    {
+        if (!is_file($filePath) || !is_readable($filePath)) {
+            return false;
+        }
+
+        try {
+            $content = file_get_contents($filePath);
+            if ($content === false) {
+                return false;
+            }
+
+            // Schnelle String-Suche nach Route-Attributen
+            return str_contains($content, '#[Route(') ||
+                str_contains($content, '#[Route ') ||
+                str_contains($content, 'use Framework\Routing\Attributes\Route');
+
+        } catch (Throwable) {
+            return false;
+        }
+    }
     public function __debugInfo(): array
     {
         return [
             'processed_files' => $this->processedFiles,
             'discovered_routes' => $this->discoveredRoutes,
             'cached_classes' => count($this->classCache),
-            'success_rate' => round($this->successRate, 1) . '%',
+            'success_rate' => round($this->successRate, 2) . '%',
             'strict_mode' => $this->strictMode,
             'max_depth' => $this->maxDepth,
         ];

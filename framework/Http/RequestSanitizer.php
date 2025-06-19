@@ -8,7 +8,7 @@ use InvalidArgumentException;
 
 /**
  * Zentrale Request-Sanitization für das gesamte Framework
- * Eliminiert Redundanz zwischen Router, RouterCore und anderen Komponenten
+ * PHP 8.4 kompatibel - nutzt neue Property Hooks Syntax
  */
 final class RequestSanitizer
 {
@@ -314,7 +314,7 @@ final class RequestSanitizer
     }
 
     /**
-     * Umfassende Request-Validierung
+     * ✅ PHP 8.4 KOMPATIBEL: Umfassende Request-Validierung
      */
     public static function validateRequest(Request $request): void
     {
@@ -336,8 +336,10 @@ final class RequestSanitizer
             throw new InvalidArgumentException('Request body too large');
         }
 
+        // ✅ KORRIGIERT: Property Hooks Syntax
         // Headers validieren
-        foreach ($request->headers()->all() as $name => $value) {
+        foreach ($request->headers->all() as $name => $value) {
+            //              ^^^^^^^ Property statt Methode
             self::sanitizeHeaderName($name);
             self::sanitizeHeaderValue($value);
         }
