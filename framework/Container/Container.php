@@ -28,10 +28,6 @@ final class Container implements ContainerInterface
         get => array_sum(array_map('count', $this->registry['services']));
     }
 
-    public bool $isCompiled {
-        get => $this->compiled;
-    }
-
     public array $registeredServices {
         get => array_keys($this->registry['services']);
     }
@@ -49,9 +45,6 @@ final class Container implements ContainerInterface
         'contextual' => [],   // Contextual bindings
     ];
     private WeakMap $reflectionCache;
-
-    // Security & Config
-    private bool $compiled = false;
 
     public function __construct(
         array $config = []
@@ -166,73 +159,6 @@ final class Container implements ContainerInterface
         $this->registry['contextual'][$context][$abstract] = $concrete;
     }
 
-    /**
-     * Forget service
-     */
-    public function forget(string $id): static
-    {
-        unset(
-            $this->registry['services'][$id],
-            $this->registry['instances'][$id],
-            $this->registry['meta'][$id],
-            $this->registry['lazy'][$id]
-        );
-
-        return $this;
-    }
-
-    /**
-     * Clear all services
-     */
-    public function flush(): static
-    {
-        $this->registry = [
-            'services' => [],
-            'instances' => [],
-            'meta' => [],
-            'lazy' => [],
-            'building' => [],
-            'contextual' => []
-        ];
-
-        $this->reflectionCache = new WeakMap();
-        $this->compiled = false;
-
-        // Self-registration
-        $this->instance(self::class, $this);
-        $this->instance(Container::class, $this);
-        $this->instance(ContainerInterface::class, $this);
-
-        return $this;
-    }
-
-    /**
-     * Compile container für maximale Performance
-     */
-    public function compile(): static
-    {
-        $this->compiled = true;
-        return $this;
-    }
-
-    /**
-     * Memory cleanup für Lazy Objects
-     */
-    public function gc(): int
-    {
-        $cleaned = 0;
-
-        // Cleanup lazy proxies ohne Referenzen
-        foreach ($this->registry['lazy'] as $id => $config) {
-            if (isset($config['proxy']) && !isset($this->registry['instances'][$id])) {
-                $this->registry['lazy'][$id]['proxy'] = null;
-                $cleaned++;
-            }
-        }
-
-        return $cleaned;
-    }
-
     public function get(string $id): mixed
     {
         return $this->resolve($id);
@@ -264,7 +190,7 @@ final class Container implements ContainerInterface
 
         // Standard resolution
         if (!$this->isRegistered($id)) {
-            // ✅ Auto-Wiring: Versuche Klasse direkt zu instanziieren
+            // Auto-Wiring: Versuche Klasse direkt zu instanziieren
             if (class_exists($id)) {
                 return $this->buildClass($id);
             }
@@ -301,7 +227,7 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * ✅ GEÄNDERT: Nutzt RequestSanitizer statt SecurityValidator
+     * Build class instance with security validation
      */
     private function buildClass(string $className): object
     {
@@ -318,7 +244,7 @@ final class Container implements ContainerInterface
             );
         }
 
-        // ✅ VEREINFACHT: Basis-Sicherheitscheck
+        // Basic security check
         if ($this->hasSecurityRisks($reflection)) {
             throw ContainerException::securityViolation($className, 'Class has security risks');
         }
@@ -355,16 +281,16 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * ✅ NEU: Vereinfachte Sicherheitsprüfung
+     * Essential security checks only
      */
     private function hasSecurityRisks(ReflectionClass $reflection): bool
     {
-        // Nur essenzielle Sicherheitschecks
+        // Only essential security checks
         if ($reflection->isInternal()) {
             return true;
         }
 
-        // Prüfe gefährliche Methoden
+        // Check for dangerous methods
         $dangerousMethods = ['eval', 'exec', 'system', 'shell_exec'];
         foreach ($dangerousMethods as $dangerous) {
             if ($reflection->hasMethod($dangerous)) {
@@ -376,7 +302,7 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Parameter-Auflösung mit Attribut-Support
+     * Parameter resolution with attribute support
      */
     private function resolveParameters(ReflectionMethod $constructor, string $context): array
     {
@@ -390,17 +316,17 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Einzelner Parameter mit Attribut-Unterstützung
+     * Single parameter with attribute support
      */
     private function resolveParameter(ReflectionParameter $parameter, string $context): mixed
     {
-        // Prüfe Inject Attribut
+        // Check Inject Attribute
         $injectAttrs = $parameter->getAttributes(Inject::class);
         if (!empty($injectAttrs)) {
             return $this->resolveInjectAttribute($injectAttrs[0], $parameter);
         }
 
-        // Prüfe Config Attribut
+        // Check Config Attribute
         $configAttrs = $parameter->getAttributes(Config::class);
         if (!empty($configAttrs)) {
             return $this->resolveConfigAttribute($configAttrs[0], $parameter);
@@ -411,7 +337,7 @@ final class Container implements ContainerInterface
         if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
             $typeName = $type->getName();
 
-            // Prüfe contextual binding zuerst
+            // Check contextual binding first
             if (isset($this->registry['contextual'][$context][$typeName])) {
                 return $this->resolveContextual($context, $typeName);
             }
@@ -421,7 +347,7 @@ final class Container implements ContainerInterface
             }
         }
 
-        // Default value oder Exception
+        // Default value or Exception
         if ($parameter->isDefaultValueAvailable()) {
             return $parameter->getDefaultValue();
         }
@@ -433,7 +359,7 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Resolve Inject Attribut
+     * Resolve Inject Attribute
      */
     private function resolveInjectAttribute(
         ReflectionAttribute $attr,
@@ -493,7 +419,7 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Resolve Config Attribut
+     * Resolve Config Attribute
      */
     private function resolveConfigAttribute(
         ReflectionAttribute $attr,
@@ -505,7 +431,7 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Sichere Konfigurationswert-Abfrage
+     * Secure configuration value query
      */
     public function getConfig(string $key, mixed $default = null): mixed
     {
@@ -527,13 +453,13 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Lazy Service Resolution mit PHP 8.4 Support
+     * Lazy Service Resolution with PHP 8.4 Support
      */
     private function resolveLazy(string $id): object
     {
         $lazyConfig = $this->registry['lazy'][$id];
 
-        // Bereits initialisiertes Lazy Object?
+        // Already initialized Lazy Object?
         if (isset($lazyConfig['proxy'])) {
             return $lazyConfig['proxy'];
         }
@@ -549,13 +475,13 @@ final class Container implements ContainerInterface
     }
 
     /**
-     * Erstelle Lazy Proxy mit PHP 8.4 Support
+     * Create Lazy Proxy with PHP 8.4 Support
      */
     private function createLazyProxy(string $id, callable $factory): object
     {
         $initializer = fn() => $factory($this);
 
-        // Versuche Zielklasse zu ermitteln für typed proxy
+        // Try to determine target class for typed proxy
         $targetClass = $this->determineTargetClass($factory);
 
         if ($targetClass && class_exists($targetClass)) {
@@ -563,12 +489,12 @@ final class Container implements ContainerInterface
             return $reflection->newLazyProxy($initializer);
         }
 
-        // PHP 8.4 native lazy object für unbekannte Zielklasse
+        // PHP 8.4 native lazy object for unknown target class
         return (new ReflectionClass(stdClass::class))->newLazyProxy($initializer);
     }
 
     /**
-     * Einfache Zielklassen-Ermittlung
+     * Simple target class determination
      */
     private function determineTargetClass(callable $factory): ?string
     {
@@ -576,11 +502,11 @@ final class Container implements ContainerInterface
             return $factory;
         }
 
-        return null; // Für komplexere Fälle verwenden wir Generic Proxy
+        return null;
     }
 
     /**
-     * Optimierte Standard-Auflösung
+     * Optimized standard resolution
      */
     private function resolveStandard(string $id): mixed
     {
@@ -628,20 +554,18 @@ final class Container implements ContainerInterface
             'resolved_instances' => count($this->registry['instances']),
             'lazy_services' => count($this->registry['lazy']),
             'contextual_bindings' => array_sum(array_map('count', $this->registry['contextual'])),
-            'compiled' => $this->isCompiled,
             'memory_usage' => memory_get_usage(true),
             'registered_services' => $this->registeredServices
         ];
     }
 
     /**
-     * Magic method für debugging
+     * Magic method for debugging
      */
     public function __debugInfo(): array
     {
         return [
             'service_count' => $this->serviceCount,
-            'is_compiled' => $this->isCompiled,
             'memory_usage' => memory_get_usage(true),
             'has_request_sanitizer' => true
         ];
@@ -649,7 +573,7 @@ final class Container implements ContainerInterface
 
     public function __destruct()
     {
-        // Cleanup für WeakMaps und Referenzen
+        // Cleanup for WeakMaps and references
         $this->reflectionCache = new WeakMap();
     }
 }

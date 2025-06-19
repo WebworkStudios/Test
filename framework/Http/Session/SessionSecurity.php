@@ -59,13 +59,15 @@ final class SessionSecurity
     /**
      * Erstelle sicheren Session-Fingerprint
      */
+    /**
+     * Erstelle sicheren Session-Fingerprint
+     */
     private function createFingerprint(): string
     {
         $components = [
             $_SERVER['HTTP_USER_AGENT'] ?? '',
             $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
             $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '',
-            session_id()
         ];
 
         return hash('sha256', implode('|', $components));
@@ -140,6 +142,9 @@ final class SessionSecurity
     /**
      * Validiere User-Agent Fingerprint
      */
+    /**
+     * Validiere User-Agent Fingerprint
+     */
     private function validateFingerprint(): void
     {
         $currentFingerprint = $this->createFingerprint();
@@ -150,8 +155,18 @@ final class SessionSecurity
             return;
         }
 
-        // Nur bei komplett anderem Fingerprint Session zerstören
+        // ✅ GELOCKERT: Nur bei komplett anderem Browser/User-Agent validieren
+        // Kleine Unterschiede durch Session-Regeneration ignorieren
         if (!hash_equals($sessionFingerprint, $currentFingerprint)) {
+            // ✅ NEU: In Development Mode weniger streng
+            $environment = $this->config['environment'] ?? 'development';
+
+            if ($environment === 'development') {
+                // In Development: Update Fingerprint statt Exception
+                $_SESSION[self::SESSION_PREFIX . 'fingerprint'] = $currentFingerprint;
+                return;
+            }
+
             throw new RuntimeException('Session fingerprint mismatch');
         }
     }
@@ -198,30 +213,4 @@ final class SessionSecurity
         $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] = time();
     }
 
-    /**
-     * Session-Cleanup beim Logout
-     */
-    public function cleanup(): void
-    {
-        // Entferne nur Framework-spezifische Keys
-        foreach ($_SESSION as $key => $value) {
-            if (str_starts_with($key, self::SESSION_PREFIX)) {
-                unset($_SESSION[$key]);
-            }
-        }
-    }
-
-    /**
-     * Hole Session-Metadata
-     */
-    public function getMetadata(): array
-    {
-        return [
-            'created_at' => $_SESSION[self::SESSION_PREFIX . 'created_at'] ?? null,
-            'last_activity' => $_SESSION[self::SESSION_PREFIX . 'last_activity'] ?? null,
-            'regenerated_at' => $_SESSION[self::SESSION_PREFIX . 'regenerated_at'] ?? null,
-            'ip_address' => $_SESSION[self::SESSION_PREFIX . 'ip_address'] ?? null,
-            'has_fingerprint' => isset($_SESSION[self::SESSION_PREFIX . 'fingerprint'])
-        ];
-    }
 }
