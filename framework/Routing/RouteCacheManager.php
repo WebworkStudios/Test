@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Framework\Routing;
 
-use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -39,11 +38,24 @@ final class RouteCacheManager
 
     public function __construct(
         private readonly string $cacheDir,
-        private readonly bool $useCompression = true,
-        private readonly int $compressionLevel = 6,
-        private readonly bool $integrityCheck = true
-    ) {
+        private readonly bool   $useCompression = true,
+        private readonly int    $compressionLevel = 6,
+        private readonly bool   $integrityCheck = true
+    )
+    {
         $this->ensureCacheDirectory();
+    }
+
+    private function ensureCacheDirectory(): void
+    {
+        if (!is_dir($this->cacheDir)) {
+            mkdir($this->cacheDir, 0755, true);
+        }
+
+        $htaccessFile = $this->cacheDir . '/.htaccess';
+        if (!file_exists($htaccessFile)) {
+            file_put_contents($htaccessFile, "Deny from all\n");
+        }
     }
 
     /**
@@ -61,30 +73,6 @@ final class RouteCacheManager
             error_log("Route cache store failed: " . $e->getMessage());
             throw $e;
         }
-    }
-
-    /**
-     * Load routes mit automatischer Fallback-Logik
-     */
-    public function load(): ?array
-    {
-        $this->totalRequests++;
-
-        // 1. Versuche optimized cache
-        $optimized = $this->loadOptimizedCache();
-        if ($optimized !== null) {
-            $this->cacheHits++;
-            return $optimized;
-        }
-
-        // 2. Fallback: Standard cache
-        $standard = $this->loadStandardCache();
-        if ($standard !== null) {
-            $this->cacheHits++;
-            return $standard;
-        }
-
-        return null;
     }
 
     /**
@@ -117,6 +105,44 @@ final class RouteCacheManager
         if ($this->integrityCheck) {
             $this->storeIntegrity($serialized);
         }
+    }
+
+    private function countRoutes(array $routes): int
+    {
+        return array_sum(array_map('count', $routes));
+    }
+
+    private function atomicWrite(string $filename, string $data): void
+    {
+        $tempFile = $filename . '.' . uniqid() . '.tmp';
+
+        if (file_put_contents($tempFile, $data, LOCK_EX) === false) {
+            throw new RuntimeException("Failed to write cache");
+        }
+
+        if (!rename($tempFile, $filename)) {
+            unlink($tempFile);
+            throw new RuntimeException("Failed to finalize cache");
+        }
+
+        chmod($filename, 0644);
+    }
+
+    private function getCacheFile(): string
+    {
+        return $this->cacheDir . '/' . self::CACHE_FILE;
+    }
+
+    private function storeIntegrity(string $data): void
+    {
+        $integrityFile = $this->getCacheFile() . '.integrity';
+        $hash = hash('sha256', $data);
+
+        file_put_contents($integrityFile, json_encode([
+            'hash' => $hash,
+            'timestamp' => time(),
+            'size' => strlen($data)
+        ]), LOCK_EX);
     }
 
     /**
@@ -175,45 +201,147 @@ final class RouteCacheManager
     }
 
     /**
-     * Load Standard Cache
+     * Optimiere Dynamic Route-Reihenfolge
      */
-    private function loadStandardCache(): ?array
+    private function optimizeDynamicRoutes(array &$routes): void
     {
-        try {
-            $cacheFile = $this->getCacheFile();
-
-            if (!$this->isValidCacheFile($cacheFile)) {
-                return null;
+        usort($routes, function (array $a, array $b): int {
+            // Routes mit weniger Parametern zuerst
+            $paramDiff = count($a['params']) - count($b['params']);
+            if ($paramDiff !== 0) {
+                return $paramDiff;
             }
 
-            if ($this->integrityCheck && !$this->verifyIntegrity($cacheFile)) {
-                $this->clear();
-                return null;
+            // Subdomain-Routes zuerst
+            if ($a['subdomain'] !== null && $b['subdomain'] === null) {
+                return -1;
+            }
+            if ($a['subdomain'] === null && $b['subdomain'] !== null) {
+                return 1;
             }
 
-            $data = file_get_contents($cacheFile);
-            if ($data === false) {
-                return null;
-            }
+            // Kürzere Pfade zuerst (spezifischer)
+            return strlen($a['path']) - strlen($b['path']);
+        });
+    }
 
-            if ($this->useCompression) {
-                $decompressed = gzuncompress($data);
-                if ($decompressed !== false) {
-                    $data = $decompressed;
+    /**
+     * Write Optimized Cache als PHP-File
+     */
+    private function writeOptimizedCache(array $cacheData): void
+    {
+        $cacheFile = $this->getOptimizedCacheFile();
+        $tempFile = $cacheFile . '.tmp.' . uniqid();
+
+        $cacheContent = "<?php\n";
+        $cacheContent .= "// Generated route cache - DO NOT EDIT\n";
+        $cacheContent .= "// Generated: " . date('Y-m-d H:i:s') . "\n\n";
+        $cacheContent .= "return " . var_export($cacheData, true) . ";\n";
+
+        if (file_put_contents($tempFile, $cacheContent, LOCK_EX) === false) {
+            throw new RuntimeException("Failed to write optimized cache");
+        }
+
+        if (!rename($tempFile, $cacheFile)) {
+            unlink($tempFile);
+            throw new RuntimeException("Failed to finalize optimized cache");
+        }
+
+        chmod($cacheFile, 0644);
+
+        // Precompile für OPcache
+        if (function_exists('opcache_compile_file')) {
+            opcache_compile_file($cacheFile);
+        }
+    }
+
+    private function getOptimizedCacheFile(): string
+    {
+        return $this->cacheDir . '/' . self::STATIC_MAP_FILE;
+    }
+
+    /**
+     * Update Cache-Statistiken
+     */
+    private function updateStats(array $routes): void
+    {
+        $routeCount = $this->countRoutes($routes);
+        $staticCount = 0;
+
+        foreach ($routes as $methodRoutes) {
+            foreach ($methodRoutes as $route) {
+                if ($route->isStatic) {
+                    $staticCount++;
                 }
             }
-
-            $cacheData = unserialize($data);
-            if (!$this->isValidCacheData($cacheData)) {
-                $this->clear();
-                return null;
-            }
-
-            return $cacheData['routes'];
-
-        } catch (Throwable) {
-            return null;
         }
+
+        $stats = [
+            'generated_at' => date('c'),
+            'php_version' => PHP_VERSION,
+            'cache_version' => self::CACHE_VERSION,
+            'routes' => [
+                'total_routes' => $routeCount,
+                'static_count' => $staticCount,
+                'dynamic_count' => $routeCount - $staticCount,
+            ],
+            'performance' => [
+                'static_route_ratio' => $routeCount > 0
+                    ? round(($staticCount / $routeCount) * 100, 1)
+                    : 0,
+                'expected_speedup' => $this->calculateSpeedup($staticCount, $routeCount)
+            ]
+        ];
+
+        file_put_contents(
+            $this->getStatsFile(),
+            json_encode($stats, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    private function calculateSpeedup(int $staticCount, int $totalCount): string
+    {
+        if ($totalCount === 0) return 'No routes';
+
+        $staticRatio = $staticCount / $totalCount;
+
+        return match (true) {
+            $staticRatio >= 0.8 => '5-10x faster',
+            $staticRatio >= 0.5 => '3-5x faster',
+            $staticRatio >= 0.2 => '2-3x faster',
+            default => '1.5-2x faster'
+        };
+    }
+
+    // Helper methods...
+
+    private function getStatsFile(): string
+    {
+        return $this->cacheDir . '/' . self::STATS_FILE;
+    }
+
+    /**
+     * Load routes mit automatischer Fallback-Logik
+     */
+    public function load(): ?array
+    {
+        $this->totalRequests++;
+
+        // 1. Versuche optimized cache
+        $optimized = $this->loadOptimizedCache();
+        if ($optimized !== null) {
+            $this->cacheHits++;
+            return $optimized;
+        }
+
+        // 2. Fallback: Standard cache
+        $standard = $this->loadStandardCache();
+        if ($standard !== null) {
+            $this->cacheHits++;
+            return $standard;
+        }
+
+        return null;
     }
 
     /**
@@ -290,108 +418,79 @@ final class RouteCacheManager
     }
 
     /**
-     * Write Optimized Cache als PHP-File
+     * Load Standard Cache
      */
-    private function writeOptimizedCache(array $cacheData): void
+    private function loadStandardCache(): ?array
     {
-        $cacheFile = $this->getOptimizedCacheFile();
-        $tempFile = $cacheFile . '.tmp.' . uniqid();
+        try {
+            $cacheFile = $this->getCacheFile();
 
-        $cacheContent = "<?php\n";
-        $cacheContent .= "// Generated route cache - DO NOT EDIT\n";
-        $cacheContent .= "// Generated: " . date('Y-m-d H:i:s') . "\n\n";
-        $cacheContent .= "return " . var_export($cacheData, true) . ";\n";
+            if (!$this->isValidCacheFile($cacheFile)) {
+                return null;
+            }
 
-        if (file_put_contents($tempFile, $cacheContent, LOCK_EX) === false) {
-            throw new RuntimeException("Failed to write optimized cache");
-        }
+            if ($this->integrityCheck && !$this->verifyIntegrity($cacheFile)) {
+                $this->clear();
+                return null;
+            }
 
-        if (!rename($tempFile, $cacheFile)) {
-            unlink($tempFile);
-            throw new RuntimeException("Failed to finalize optimized cache");
-        }
+            $data = file_get_contents($cacheFile);
+            if ($data === false) {
+                return null;
+            }
 
-        chmod($cacheFile, 0644);
-
-        // Precompile für OPcache
-        if (function_exists('opcache_compile_file')) {
-            opcache_compile_file($cacheFile);
-        }
-    }
-
-    /**
-     * Update Cache-Statistiken
-     */
-    private function updateStats(array $routes): void
-    {
-        $routeCount = $this->countRoutes($routes);
-        $staticCount = 0;
-
-        foreach ($routes as $methodRoutes) {
-            foreach ($methodRoutes as $route) {
-                if ($route->isStatic) {
-                    $staticCount++;
+            if ($this->useCompression) {
+                $decompressed = gzuncompress($data);
+                if ($decompressed !== false) {
+                    $data = $decompressed;
                 }
             }
+
+            $cacheData = unserialize($data);
+            if (!$this->isValidCacheData($cacheData)) {
+                $this->clear();
+                return null;
+            }
+
+            return $cacheData['routes'];
+
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function isValidCacheFile(string $cacheFile): bool
+    {
+        if (!file_exists($cacheFile) || !is_readable($cacheFile)) {
+            return false;
         }
 
-        $stats = [
-            'generated_at' => date('c'),
-            'php_version' => PHP_VERSION,
-            'cache_version' => self::CACHE_VERSION,
-            'routes' => [
-                'total_routes' => $routeCount,
-                'static_count' => $staticCount,
-                'dynamic_count' => $routeCount - $staticCount,
-            ],
-            'performance' => [
-                'static_route_ratio' => $routeCount > 0
-                    ? round(($staticCount / $routeCount) * 100, 1)
-                    : 0,
-                'expected_speedup' => $this->calculateSpeedup($staticCount, $routeCount)
-            ]
-        ];
+        $mtime = filemtime($cacheFile);
+        if ($mtime === false || (time() - $mtime) > self::CACHE_TTL) {
+            return false;
+        }
 
-        file_put_contents(
-            $this->getStatsFile(),
-            json_encode($stats, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-        );
+        $size = filesize($cacheFile);
+        return $size !== false && $size > 0 && $size <= self::MAX_CACHE_SIZE;
     }
 
-    /**
-     * Optimiere Dynamic Route-Reihenfolge
-     */
-    private function optimizeDynamicRoutes(array &$routes): void
+    private function verifyIntegrity(string $cacheFile): bool
     {
-        usort($routes, function (array $a, array $b): int {
-            // Routes mit weniger Parametern zuerst
-            $paramDiff = count($a['params']) - count($b['params']);
-            if ($paramDiff !== 0) {
-                return $paramDiff;
-            }
+        $integrityFile = $cacheFile . '.integrity';
 
-            // Subdomain-Routes zuerst
-            if ($a['subdomain'] !== null && $b['subdomain'] === null) {
-                return -1;
-            }
-            if ($a['subdomain'] === null && $b['subdomain'] !== null) {
-                return 1;
-            }
+        if (!file_exists($integrityFile)) {
+            return false;
+        }
 
-            // Kürzere Pfade zuerst (spezifischer)
-            return strlen($a['path']) - strlen($b['path']);
-        });
-    }
+        try {
+            $integrity = json_decode(file_get_contents($integrityFile), true);
+            $cacheData = file_get_contents($cacheFile);
 
-    /**
-     * Validate Cache
-     */
-    public function validateCache(): bool
-    {
-        $optimizedExists = file_exists($this->getOptimizedCacheFile());
-        $standardExists = $this->isValidCacheFile($this->getCacheFile());
-
-        return $optimizedExists || $standardExists;
+            return $integrity && $cacheData &&
+                hash_equals($integrity['hash'], hash('sha256', $cacheData));
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -418,6 +517,31 @@ final class RouteCacheManager
         if (function_exists('opcache_reset')) {
             opcache_reset();
         }
+    }
+
+    private function resetMetrics(): void
+    {
+        $this->cacheHits = 0;
+        $this->totalRequests = 0;
+    }
+
+    private function isValidCacheData(mixed $cacheData): bool
+    {
+        return is_array($cacheData) &&
+            isset($cacheData['version'], $cacheData['routes']) &&
+            $cacheData['version'] === self::CACHE_VERSION &&
+            is_array($cacheData['routes']);
+    }
+
+    /**
+     * Validate Cache
+     */
+    public function validateCache(): bool
+    {
+        $optimizedExists = file_exists($this->getOptimizedCacheFile());
+        $standardExists = $this->isValidCacheFile($this->getCacheFile());
+
+        return $optimizedExists || $standardExists;
     }
 
     /**
@@ -450,123 +574,6 @@ final class RouteCacheManager
         return $baseStats;
     }
 
-    // Helper methods...
-    private function ensureCacheDirectory(): void
-    {
-        if (!is_dir($this->cacheDir)) {
-            mkdir($this->cacheDir, 0755, true);
-        }
-
-        $htaccessFile = $this->cacheDir . '/.htaccess';
-        if (!file_exists($htaccessFile)) {
-            file_put_contents($htaccessFile, "Deny from all\n");
-        }
-    }
-
-    private function getCacheFile(): string
-    {
-        return $this->cacheDir . '/' . self::CACHE_FILE;
-    }
-
-    private function getOptimizedCacheFile(): string
-    {
-        return $this->cacheDir . '/' . self::STATIC_MAP_FILE;
-    }
-
-    private function getStatsFile(): string
-    {
-        return $this->cacheDir . '/' . self::STATS_FILE;
-    }
-
-    private function countRoutes(array $routes): int
-    {
-        return array_sum(array_map('count', $routes));
-    }
-
-    private function calculateSpeedup(int $staticCount, int $totalCount): string
-    {
-        if ($totalCount === 0) return 'No routes';
-
-        $staticRatio = $staticCount / $totalCount;
-
-        return match (true) {
-            $staticRatio >= 0.8 => '5-10x faster',
-            $staticRatio >= 0.5 => '3-5x faster',
-            $staticRatio >= 0.2 => '2-3x faster',
-            default => '1.5-2x faster'
-        };
-    }
-
-    private function atomicWrite(string $filename, string $data): void
-    {
-        $tempFile = $filename . '.' . uniqid() . '.tmp';
-
-        if (file_put_contents($tempFile, $data, LOCK_EX) === false) {
-            throw new RuntimeException("Failed to write cache");
-        }
-
-        if (!rename($tempFile, $filename)) {
-            unlink($tempFile);
-            throw new RuntimeException("Failed to finalize cache");
-        }
-
-        chmod($filename, 0644);
-    }
-
-    private function storeIntegrity(string $data): void
-    {
-        $integrityFile = $this->getCacheFile() . '.integrity';
-        $hash = hash('sha256', $data);
-
-        file_put_contents($integrityFile, json_encode([
-            'hash' => $hash,
-            'timestamp' => time(),
-            'size' => strlen($data)
-        ]), LOCK_EX);
-    }
-
-    private function verifyIntegrity(string $cacheFile): bool
-    {
-        $integrityFile = $cacheFile . '.integrity';
-
-        if (!file_exists($integrityFile)) {
-            return false;
-        }
-
-        try {
-            $integrity = json_decode(file_get_contents($integrityFile), true);
-            $cacheData = file_get_contents($cacheFile);
-
-            return $integrity && $cacheData &&
-                hash_equals($integrity['hash'], hash('sha256', $cacheData));
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
-    private function isValidCacheFile(string $cacheFile): bool
-    {
-        if (!file_exists($cacheFile) || !is_readable($cacheFile)) {
-            return false;
-        }
-
-        $mtime = filemtime($cacheFile);
-        if ($mtime === false || (time() - $mtime) > self::CACHE_TTL) {
-            return false;
-        }
-
-        $size = filesize($cacheFile);
-        return $size !== false && $size > 0 && $size <= self::MAX_CACHE_SIZE;
-    }
-
-    private function isValidCacheData(mixed $cacheData): bool
-    {
-        return is_array($cacheData) &&
-            isset($cacheData['version'], $cacheData['routes']) &&
-            $cacheData['version'] === self::CACHE_VERSION &&
-            is_array($cacheData['routes']);
-    }
-
     private function getCacheFileSize(): int
     {
         $files = [
@@ -595,11 +602,5 @@ final class RouteCacheManager
         }
 
         return round($bytes, 2) . ' ' . $units[$unitIndex];
-    }
-
-    private function resetMetrics(): void
-    {
-        $this->cacheHits = 0;
-        $this->totalRequests = 0;
     }
 }

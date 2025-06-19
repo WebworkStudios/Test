@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace framework\Http\Session;
+namespace Framework\Http\Session;
 
 interface AuthInterface
 {

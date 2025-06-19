@@ -10,7 +10,6 @@ use framework\Http\Session\Session;
 use Framework\Routing\{Attributes\Route,
     Exceptions\MethodNotAllowedException,
     Exceptions\RouteNotFoundException,
-    RouteCacheBuilder,
     Router};
 use Framework\Security\Csrf\CsrfProtection;
 use RecursiveDirectoryIterator;
@@ -60,11 +59,22 @@ final class Kernel
             });
             error_log("✅ CSRF protection registered");
 
-            // ✅ FIX: Router-Registrierung OHNE sofortige Route-Discovery
+            // ✅ FIX: Vereinfachte Router-Registrierung OHNE sofortige Discovery
             $this->container->singleton(Router::class, function (Container $c) {
-                error_log("🔄 Creating router...");
-                $router = $this->createOptimizedRouter($c);
-                error_log("✅ Router created (without discovery)");
+                error_log("🔄 Creating router instance...");
+
+                $routingConfig = $this->config['routing'] ?? [];
+
+                $router = Router::create($c, [
+                    'debug' => $this->config['app']['debug'] ?? false,
+                    'strict' => $routingConfig['strict'] ?? false, // ✅ Weniger strikt für bessere Kompatibilität
+                    'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
+                    'cache' => $routingConfig['cache'] ?? [],
+                    'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+                    'base_domain' => $this->config['app']['domain'] ?? 'localhost'
+                ]);
+
+                error_log("✅ Router instance created");
                 return $router;
             });
             error_log("✅ Router service registered");
@@ -76,26 +86,6 @@ final class Kernel
         }
     }
 
-    /**
-     * Create optimized router with proper configuration
-     */
-    private function createOptimizedRouter(Container $container): Router
-    {
-        $routingConfig = $this->config['routing'] ?? [];
-
-        return Router::create($container, [
-            'debug' => $this->config['debug'] ?? false,
-            'strict' => $routingConfig['strict'] ?? true,
-            'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
-            'cache' => $routingConfig['cache'] ?? [],
-            'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
-            'base_domain' => $this->config['app']['domain'] ?? 'localhost'
-        ]);
-    }
-
-    /**
-     * Handle incoming HTTP request with performance optimizations
-     */
     /**
      * Handle incoming HTTP request with performance optimizations
      */
@@ -132,6 +122,10 @@ final class Kernel
     }
 
     /**
+     * Handle incoming HTTP request with performance optimizations
+     */
+
+    /**
      * Boot the kernel and all services
      */
     public function boot(): void
@@ -148,11 +142,18 @@ final class Kernel
             $session->start();
             error_log("✅ Session started");
 
-            // ✅ FIX: Route-Discovery HIER ausführen, nur einmal
-            if ($this->config['routing']['auto_discover'] ?? true) {
+            // ✅ FIX: Route-Discovery nur einmal und nur wenn konfiguriert
+            if (($this->config['routing']['auto_discover'] ?? true)) {
                 error_log("🔄 Starting route discovery...");
                 $router = $this->container->get(Router::class);
-                $this->performRouteDiscoveryImmediate($router);
+
+                // Prüfe ob bereits Routen vorhanden sind (verhindert doppelte Registrierung)
+                if (empty($router->getRoutes())) {
+                    $this->performSingleRouteDiscovery($router);
+                } else {
+                    error_log("ℹ️ Routes already discovered, skipping");
+                }
+
                 error_log("✅ Route discovery completed");
             }
 
@@ -169,6 +170,234 @@ final class Kernel
             error_log("   File: " . $e->getFile() . ":" . $e->getLine());
             throw $e;
         }
+    }
+
+    /**
+     * ✅ NEUE METHODE: Vereinfachte, sichere Route-Discovery
+     */
+    private function performSingleRouteDiscovery(Router $router): void
+    {
+        $directories = $this->config['routing']['discovery_paths'] ?? [
+            __DIR__ . '/../app/Actions',
+            __DIR__ . '/../app/Controllers'
+        ];
+
+        error_log("🔍 Route-Discovery startet für Verzeichnisse: " . implode(', ', $directories));
+
+        // Filtere existierende Verzeichnisse
+        $existingDirs = array_filter($directories, function ($dir) {
+            $exists = is_dir($dir) && is_readable($dir);
+            error_log($exists ? "✅ Verzeichnis OK: {$dir}" : "❌ Verzeichnis fehlt: {$dir}");
+            return $exists;
+        });
+
+        if (empty($existingDirs)) {
+            error_log("⚠️ Keine gültigen Verzeichnisse für Route-Discovery gefunden!");
+            return;
+        }
+
+        try {
+            // Verwende Router's eigene Discovery-Methode
+            $router->autoDiscoverRoutes($existingDirs);
+
+            $routes = $router->getRoutes();
+            $totalRoutes = array_sum(array_map('count', $routes));
+            error_log("📋 Insgesamt {$totalRoutes} Routen registriert");
+
+        } catch (Throwable $e) {
+            error_log("❌ Route-Discovery Fehler: " . $e->getMessage());
+
+            // ✅ Fallback: Minimale manuelle Registrierung
+            if (empty($router->getRoutes())) {
+                error_log("🔄 Fallback: Registriere HomeAction manuell...");
+                $this->registerFallbackRoutes($router);
+            }
+        }
+    }
+
+    /**
+     * ✅ NEUE METHODE: Fallback-Routen für kritische Pfade
+     */
+
+    private function registerFallbackRoutes(Router $router): void
+    {
+        try {
+            // Nur die absolut kritische HomeAction als Fallback
+            if (class_exists('App\\Actions\\HomeAction')) {
+                $router->addRoute('GET', '/', 'App\\Actions\\HomeAction', [], 'home');
+                error_log("✅ HomeAction als Fallback registriert");
+            } else {
+                error_log("⚠️ HomeAction nicht gefunden - keine Fallback-Route verfügbar");
+            }
+
+        } catch (Throwable $e) {
+            error_log("❌ Fallback-Registrierung fehlgeschlagen: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Boot registered service providers
+     */
+    private function bootProviders(): void
+    {
+        foreach ($this->providers as $provider) {
+            if (method_exists($provider, 'boot')) {
+                $provider->boot();
+            }
+        }
+    }
+
+    /**
+     * Enhanced exception handling with better error responses
+     */
+    private function handleException(Throwable $e, Request $request): Response
+    {
+        // Log error in debug mode
+        if ($this->config['debug'] ?? false) {
+            error_log("Kernel exception: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+        }
+
+        // Return appropriate HTTP response based on exception type
+        return match (true) {
+            $e instanceof RouteNotFoundException =>
+            Response::notFound('Route not found'),
+
+            $e instanceof MethodNotAllowedException =>
+            Response::json([
+                'error' => 'Method not allowed',
+                'allowed_methods' => $e->getAllowedMethods()
+            ], 405),
+
+            default => Response::serverError(
+                ($this->config['debug'] ?? false) ? $e->getMessage() : 'Internal server error'
+            )
+        };
+    }
+
+    /**
+     * Register service provider
+     */
+    public function register(object $provider): void
+    {
+        if (method_exists($provider, 'register')) {
+            $provider->register();
+        }
+
+        $this->providers[] = $provider;
+
+        // Boot immediately if kernel already booted
+        if ($this->booted && method_exists($provider, 'boot')) {
+            $provider->boot();
+        }
+    }
+
+    /**
+     * Get container instance
+     */
+    public function getContainer(): Container
+    {
+        return $this->container;
+    }
+
+    /**
+     * Get framework performance statistics
+     */
+    public function getPerformanceStats(): array
+    {
+        $stats = [
+            'kernel' => [
+                'is_booted' => $this->booted,
+                'providers_count' => count($this->providers),
+                'memory_usage' => memory_get_usage(true),
+                'peak_memory' => memory_get_peak_usage(true)
+            ]
+        ];
+
+        // Add router stats if available
+        try {
+            $router = $this->container->get(Router::class);
+            $stats['router'] = $router->getStats();
+        } catch (Throwable) {
+            $stats['router'] = ['error' => 'Router not available'];
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Warm up all framework caches
+     */
+    public function warmUp(): void
+    {
+        try {
+            // Warm up router
+            $router = $this->container->get(Router::class);
+            $router->warmUp();
+
+            if ($this->config['debug'] ?? false) {
+                error_log("✅ Framework warm-up completed");
+            }
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("❌ Framework warm-up failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Clear all framework caches
+     */
+    public function clearCaches(): void
+    {
+        try {
+            // Clear router caches
+            $router = $this->container->get(Router::class);
+            $router->clearCaches();
+
+            if ($this->config['debug'] ?? false) {
+                error_log("✅ Framework caches cleared");
+            }
+        } catch (Throwable $e) {
+            if ($this->config['debug'] ?? false) {
+                error_log("❌ Cache clearing failed: " . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Terminate the kernel
+     */
+    public function terminate(): void
+    {
+        // Cleanup providers
+        foreach ($this->providers as $provider) {
+            if (method_exists($provider, 'terminate')) {
+                $provider->terminate();
+            }
+        }
+
+        $this->booted = false;
+    }
+
+    /**
+     * Get framework performance statistics
+     */
+
+    /**
+     * Create optimized router with proper configuration
+     */
+    private function createOptimizedRouter(Container $container): Router
+    {
+        $routingConfig = $this->config['routing'] ?? [];
+
+        return Router::create($container, [
+            'debug' => $this->config['debug'] ?? false,
+            'strict' => $routingConfig['strict'] ?? true,
+            'cache_dir' => $routingConfig['cache_dir'] ?? __DIR__ . '/../storage/cache/routes',
+            'cache' => $routingConfig['cache'] ?? [],
+            'allowed_subdomains' => $routingConfig['allowed_subdomains'] ?? ['api', 'admin', 'www'],
+            'base_domain' => $this->config['app']['domain'] ?? 'localhost'
+        ]);
     }
 
     /**
@@ -347,155 +576,5 @@ final class Kernel
             error_log("❌ Fehler beim Scannen von {$filePath}: " . $e->getMessage());
             return 0;
         }
-    }
-
-    /**
-     * Boot registered service providers
-     */
-    private function bootProviders(): void
-    {
-        foreach ($this->providers as $provider) {
-            if (method_exists($provider, 'boot')) {
-                $provider->boot();
-            }
-        }
-    }
-
-    /**
-     * Enhanced exception handling with better error responses
-     */
-    private function handleException(Throwable $e, Request $request): Response
-    {
-        // Log error in debug mode
-        if ($this->config['debug'] ?? false) {
-            error_log("Kernel exception: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
-        }
-
-        // Return appropriate HTTP response based on exception type
-        return match (true) {
-            $e instanceof RouteNotFoundException =>
-            Response::notFound('Route not found'),
-
-            $e instanceof MethodNotAllowedException =>
-            Response::json([
-                'error' => 'Method not allowed',
-                'allowed_methods' => $e->getAllowedMethods()
-            ], 405),
-
-            default => Response::serverError(
-                ($this->config['debug'] ?? false) ? $e->getMessage() : 'Internal server error'
-            )
-        };
-    }
-
-    /**
-     * Register service provider
-     */
-    public function register(object $provider): void
-    {
-        if (method_exists($provider, 'register')) {
-            $provider->register();
-        }
-
-        $this->providers[] = $provider;
-
-        // Boot immediately if kernel already booted
-        if ($this->booted && method_exists($provider, 'boot')) {
-            $provider->boot();
-        }
-    }
-
-    /**
-     * Get container instance
-     */
-    public function getContainer(): Container
-    {
-        return $this->container;
-    }
-
-    /**
-     * Get framework performance statistics
-     */
-    public function getPerformanceStats(): array
-    {
-        $stats = [
-            'kernel' => [
-                'is_booted' => $this->booted,
-                'providers_count' => count($this->providers),
-                'memory_usage' => memory_get_usage(true),
-                'peak_memory' => memory_get_peak_usage(true)
-            ]
-        ];
-
-        // Add router stats if available
-        try {
-            $router = $this->container->get(Router::class);
-            $stats['router'] = $router->getStats();
-        } catch (Throwable) {
-            $stats['router'] = ['error' => 'Router not available'];
-        }
-
-        // Add cache stats if available
-        $cacheStats = RouteCacheBuilder::getCacheStats();
-        if ($cacheStats) {
-            $stats['route_cache'] = $cacheStats;
-        }
-
-        return $stats;
-    }
-
-    /**
-     * Warm up all framework caches
-     */
-    public function warmUp(): void
-    {
-        try {
-            // Warm up router
-            $router = $this->container->get(Router::class);
-            $router->warmUp();
-
-            if ($this->config['debug'] ?? false) {
-                error_log("✅ Framework warm-up completed");
-            }
-        } catch (Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("❌ Framework warm-up failed: " . $e->getMessage());
-            }
-        }
-    }
-
-    /**
-     * Clear all framework caches
-     */
-    public function clearCaches(): void
-    {
-        try {
-            // Clear router caches
-            $router = $this->container->get(Router::class);
-            $router->clearCaches();
-
-            if ($this->config['debug'] ?? false) {
-                error_log("✅ Framework caches cleared");
-            }
-        } catch (Throwable $e) {
-            if ($this->config['debug'] ?? false) {
-                error_log("❌ Cache clearing failed: " . $e->getMessage());
-            }
-        }
-    }
-
-    /**
-     * Terminate the kernel
-     */
-    public function terminate(): void
-    {
-        // Cleanup providers
-        foreach ($this->providers as $provider) {
-            if (method_exists($provider, 'terminate')) {
-                $provider->terminate();
-            }
-        }
-
-        $this->booted = false;
     }
 }

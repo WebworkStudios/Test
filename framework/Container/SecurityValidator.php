@@ -11,13 +11,13 @@ use ReflectionMethod;
 
 /**
  * Security Validator für Container-Operationen mit PHP 8.4 Features
- * Nutzt RequestSanitizer für konsistente Validierung
+ * Delegiert alle Basis-Validierungen an RequestSanitizer für Konsistenz
  */
 final readonly class SecurityValidator
 {
     private const int MAX_FILE_SIZE = 2097152; // 2MB
 
-    // Gefährliche Patterns für Code-Scanning
+    // Gefährliche Patterns für Code-Scanning (Container-spezifisch)
     private const array DANGEROUS_CODE_PATTERNS = [
         '/eval\s*\(/i',
         '/system\s*\(/i',
@@ -29,13 +29,8 @@ final readonly class SecurityValidator
         '/base64_decode\s*\(/i'
     ];
 
-    // Gefährliche Interfaces
-    private const array DANGEROUS_INTERFACES = [
-        'Serializable',
-        'Traversable'
-    ];
-
-    // Gefährliche Methodennamen
+    // Container-spezifische gefährliche Elemente
+    private const array DANGEROUS_INTERFACES = ['Serializable', 'Traversable'];
     private const array DANGEROUS_METHODS = [
         'eval', 'system', 'exec', 'shell_exec', 'passthru',
         '__destruct', '__wakeup', '__unserialize', '__serialize',
@@ -50,32 +45,55 @@ final readonly class SecurityValidator
     }
 
     /**
-     * Validiert PHP-Klassen auf Sicherheitsrisiken
+     * ✅ VEREINFACHT: Delegiert Service-ID-Validierung an RequestSanitizer
+     */
+    public function isServiceIdSafe(string $serviceId): bool
+    {
+        return RequestSanitizer::isSecureClassName($serviceId);
+    }
+
+    /**
+     * ✅ VEREINFACHT: Delegiert Namespace-Validierung an RequestSanitizer
+     */
+    public function isNamespaceSafe(string $namespace): bool
+    {
+        return RequestSanitizer::isSecureClassName($namespace);
+    }
+
+    /**
+     * ✅ FOKUSSIERT: Nur Container-spezifische Klassen-Validierung
      */
     public function isClassSecure(ReflectionClass $reflection): bool
     {
+        // Basis-Klassennamen-Check über RequestSanitizer
+        if (!$this->isClassNameSafe($reflection->getName())) {
+            return false;
+        }
+
         return match (true) {
             $reflection->isInternal() => false,
             $this->isActionClass($reflection) => true,
             $this->isFrameworkClass($reflection) => true,
-            $this->hasSecurityRisks($reflection) => false,
+            $this->hasContainerSecurityRisks($reflection) => false,
             !$this->isClassFileSecure($reflection) => false,
             default => true
         };
     }
 
     /**
-     * Prüft ob es eine Action-Klasse ist
+     * ✅ VEREINFACHT: Delegiert Klassennamen-Validierung an RequestSanitizer
      */
+    public function isClassNameSafe(string $className): bool
+    {
+        return RequestSanitizer::isSecureClassName($className);
+    }
+
     private function isActionClass(ReflectionClass $reflection): bool
     {
         $className = $reflection->getName();
-
         $actionNamespaces = [
-            'App\\Actions\\',
-            'App\\Controllers\\',
-            'App\\Http\\Actions\\',
-            'App\\Http\\Controllers\\'
+            'App\\Actions\\', 'App\\Controllers\\',
+            'App\\Http\\Actions\\', 'App\\Http\\Controllers\\'
         ];
 
         foreach ($actionNamespaces as $namespace) {
@@ -83,44 +101,35 @@ final readonly class SecurityValidator
                 return $reflection->hasMethod('__invoke');
             }
         }
-
         return false;
     }
 
-    /**
-     * Prüft ob es eine Framework-Klasse ist
-     */
     private function isFrameworkClass(ReflectionClass $reflection): bool
     {
         $className = $reflection->getName();
-
-        $frameworkNamespaces = [
-            'Framework\\',
-            'App\\'
-        ];
+        $frameworkNamespaces = ['Framework\\', 'App\\'];
 
         foreach ($frameworkNamespaces as $namespace) {
             if (str_starts_with($className, $namespace)) {
                 return true;
             }
         }
-
         return false;
     }
 
     /**
-     * Prüft Klasse auf Sicherheitsrisiken
+     * ✅ FOKUSSIERT: Container-spezifische Sicherheitsrisiken
      */
-    private function hasSecurityRisks(ReflectionClass $reflection): bool
+    private function hasContainerSecurityRisks(ReflectionClass $reflection): bool
     {
-        // Prüfe gefährliche Interfaces
+        // Prüfe gefährliche Interfaces (Container-spezifisch)
         foreach (self::DANGEROUS_INTERFACES as $dangerousInterface) {
             if ($reflection->implementsInterface($dangerousInterface)) {
                 return true;
             }
         }
 
-        // Prüfe gefährliche Methoden
+        // Prüfe gefährliche Methoden (Container-spezifisch)
         $methods = $reflection->getMethods(ReflectionMethod::IS_PUBLIC);
         foreach ($methods as $method) {
             if (in_array(strtolower($method->getName()), self::DANGEROUS_METHODS, true)) {
@@ -131,38 +140,35 @@ final readonly class SecurityValidator
         return false;
     }
 
-    /**
-     * Prüft ob Klassendatei sicher ist
-     */
     private function isClassFileSecure(ReflectionClass $reflection): bool
     {
         $fileName = $reflection->getFileName();
-
-        if ($fileName === false) {
-            return true; // Built-in classes
-        }
-
-        return $this->isFileSafe($fileName);
+        return $fileName === false || $this->isFileSafe($fileName);
     }
 
+    // === Private Helper Methods (Container-spezifisch) ===
+
     /**
-     * Validiert Dateien auf Größe und Sicherheit
+     * ✅ FOKUSSIERT: Nur Container-relevante Datei-Validierung
      */
     public function isFileSafe(string $filePath): bool
     {
+        // Basis-Validierung über RequestSanitizer
+        if (!$this->isPathSafe($filePath)) {
+            return false;
+        }
+
         return match (true) {
             !file_exists($filePath) => false,
             !is_readable($filePath) => false,
-            !$this->isPathSafe($filePath) => false,
             !$this->isValidFileSize($filePath) => false,
-            !$this->isValidFileExtension($filePath) => false,
-            !$this->isValidFileName($filePath) => false,
+            !$this->isValidPhpFile($filePath) => false,
             default => true
         };
     }
 
     /**
-     * Delegiere Path-Validierung an RequestSanitizer
+     * ✅ VEREINFACHT: Delegiert Path-Validierung an RequestSanitizer
      */
     public function isPathSafe(string $path): bool
     {
@@ -174,9 +180,6 @@ final readonly class SecurityValidator
         }
     }
 
-    /**
-     * Prüft ob Pfad innerhalb erlaubter Pfade liegt
-     */
     private function isWithinAllowedPaths(string $realPath): bool
     {
         if (empty($this->allowedPaths)) {
@@ -189,73 +192,34 @@ final readonly class SecurityValidator
                 return true;
             }
         }
-
         return false;
     }
 
-    /**
-     * Validiert Dateigröße
-     */
     private function isValidFileSize(string $filePath): bool
     {
         $size = filesize($filePath);
         return $size !== false && $size > 0 && $size <= self::MAX_FILE_SIZE;
     }
 
-    /**
-     * Validiert Dateierweiterung
-     */
-    private function isValidFileExtension(string $filePath): bool
+    private function isValidPhpFile(string $filePath): bool
     {
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-        return $extension === 'php';
-    }
+        if ($extension !== 'php') {
+            return false;
+        }
 
-    /**
-     * Validiert Dateinamen
-     */
-    private function isValidFileName(string $filePath): bool
-    {
         $filename = basename($filePath);
-
-        return match (true) {
-            str_starts_with($filename, '.') => false,
-            str_starts_with($filename, '_') => false,
-            str_starts_with($filename, '#') => false,
-            preg_match('/\.(bak|tmp|old|orig)\.php$/', $filename) => false,
-            default => true
-        };
+        return !str_starts_with($filename, '.') &&
+            !str_starts_with($filename, '_') &&
+            !str_starts_with($filename, '#');
     }
 
     /**
-     * Delegiere Klassennamen-Validierung an RequestSanitizer
-     */
-    public function isClassNameSafe(string $className): bool
-    {
-        return RequestSanitizer::isSecureClassName($className);
-    }
-
-    /**
-     * Delegiere Service-ID-Validierung an RequestSanitizer
-     */
-    public function isServiceIdSafe(string $serviceId): bool
-    {
-        return RequestSanitizer::isSecureClassName($serviceId);
-    }
-
-    /**
-     * Delegiere Namespace-Validierung an RequestSanitizer
-     */
-    public function isNamespaceSafe(string $namespace): bool
-    {
-        return RequestSanitizer::isSecureClassName($namespace);
-    }
-
-    /**
-     * Validiert Dateinehalte auf gefährlichen Code
+     * ✅ FOKUSSIERT: Container-spezifische Content-Validierung
      */
     public function isContentSafe(string $content): bool
     {
+        // Container-spezifische gefährliche Patterns
         foreach (self::DANGEROUS_CODE_PATTERNS as $pattern) {
             if (preg_match($pattern, $content)) {
                 return false;
@@ -263,39 +227,26 @@ final readonly class SecurityValidator
         }
 
         if ($this->strictMode) {
-            return $this->strictContentValidation($content);
+            return $this->strictContainerValidation($content);
         }
 
         return true;
     }
 
-    /**
-     * Strenge Content-Validierung für strict mode
-     */
-    private function strictContentValidation(string $content): bool
+    private function strictContainerValidation(string $content): bool
     {
-        $suspiciousStrings = [
-            'eval(',
-            'assert(',
-            'create_function(',
-            'preg_replace_callback_array(',
-            '${',
-            'extract(',
-            'parse_str('
+        $containerSuspicious = [
+            'eval(', 'assert(', 'create_function(', 'extract(', 'parse_str('
         ];
 
-        foreach ($suspiciousStrings as $suspicious) {
+        foreach ($containerSuspicious as $suspicious) {
             if (str_contains(strtolower($content), $suspicious)) {
                 return false;
             }
         }
-
         return true;
     }
 
-    /**
-     * Magic method für Debugging
-     */
     public function __debugInfo(): array
     {
         return [
